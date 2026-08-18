@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, stat } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
@@ -22,11 +22,20 @@ function makeAgent(id, cwd, { status = 'idle', events = [] } = {}) {
     return true
   }
   const tools = new Map()
+  const session = {
+    header: { id, cwd },
+    events,
+    append(type, data) {
+      const event = { seq: this.events.length, type, data }
+      this.events.push(event)
+      return event
+    },
+  }
   return {
     id,
     status,
     options: { provider: 'test', model: 'test-model' },
-    session: { header: { id, cwd }, events },
+    session,
     inbox,
     ctx: {
       tools: {
@@ -49,6 +58,42 @@ function makeAgent(id, cwd, { status = 'idle', events = [] } = {}) {
   }
 }
 
+function installFakeScheduleTools(agent) {
+  agent.tools.set('schedule_create', {
+    async execute(args, exec) {
+      assert.equal(exec.agent, agent)
+      const id = `schedule-${agent.session.events.filter((event) => (
+        event.type === 'schedule/change' && event.data?.operation === 'create'
+      )).length + 1}`
+      const now = Date.now()
+      const record = args.after_seconds !== undefined
+        ? {
+          id,
+          kind: 'after',
+          prompt: args.prompt,
+          afterSeconds: args.after_seconds,
+          scheduledAt: new Date(now + args.after_seconds * 1000).toISOString(),
+        }
+        : {
+          id,
+          kind: 'every',
+          prompt: args.prompt,
+          everySeconds: args.every_seconds,
+          scheduledAt: new Date(now + args.every_seconds * 1000).toISOString(),
+        }
+      agent.session.append('schedule/change', { version: 1, operation: 'create', schedule: record })
+      return { ...record, state: 'scheduled', deliveryMode: 'session-local' }
+    },
+  })
+  agent.tools.set('schedule_delete', {
+    async execute(args, exec) {
+      assert.equal(exec.agent, agent)
+      agent.session.append('schedule/change', { version: 1, operation: 'delete', id: args.id })
+      return { id: args.id, deleted: true }
+    },
+  })
+}
+
 async function fixture(t) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'dsh-session-control-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
@@ -56,6 +101,7 @@ async function fixture(t) {
   const target = makeAgent('target', 'D:\\work')
   const otherWorkspace = makeAgent('other', 'D:\\other')
   const agents = [source, target, otherWorkspace]
+  const workspaces = []
   const store = await new OperationStore({ stateDir: directory, maxOperations: 50 }).load()
   t.after(() => store.dispose())
   const ctx = {
@@ -80,6 +126,34 @@ async function fixture(t) {
       },
     },
     sessions: { async flush() {} },
+    tools: { get: (name, agent) => agent.tools.get(name) },
+    workspaceRegistry: {
+      list: () => [...workspaces],
+      async resolveByPath(value) {
+        const resolved = path.resolve(value)
+        return workspaces.find((workspace) => workspace.path === resolved)
+      },
+      async create(value, title) {
+        const resolved = path.resolve(value)
+        const existing = workspaces.find((workspace) => workspace.path === resolved)
+        if (existing !== undefined) return existing
+        const sessionIds = []
+        const workspace = {
+          id: `workspace-${workspaces.length + 1}`,
+          path: resolved,
+          title: title ?? path.basename(resolved),
+          sessionIds,
+          createdAt: '2026-08-18T00:00:00.000Z',
+          updatedAt: '2026-08-18T00:00:00.000Z',
+          async attachSession(id) {
+            if (!sessionIds.includes(id)) sessionIds.unshift(id)
+          },
+          async status() { return 'ok' },
+        }
+        workspaces.unshift(workspace)
+        return workspace
+      },
+    },
     get() { return undefined },
     sessionPersistence: {
       async list() { return [] },
@@ -95,7 +169,7 @@ async function fixture(t) {
     rateLimitPerMinute: 5,
     maxOperations: 50,
   }
-  const lifecycle = { ownedHandles: new Map(), overrides: new Map() }
+  const lifecycle = { ownedHandles: new Map(), overrides: new Map(), scheduleCoordinator: null }
   const api = makeApi(ctx, config, store, new Set(['controller', 'second-controller']), lifecycle)
   return { source, target, otherWorkspace, agents, store, api, ctx, config, lifecycle }
 }
@@ -147,6 +221,18 @@ test('cross-workspace target and operation theft are rejected', async (t) => {
   }, { agent: thief, signal: new AbortController().signal }), /不属于/u)
 })
 
+test('cross-workspace control is enabled when the deployment switch is false', async (t) => {
+  const { source, otherWorkspace, api, config } = await fixture(t)
+  config.sameWorkspaceOnly = false
+  const result = await api.send({
+    target_id: otherWorkspace.id,
+    content: '跨工作区验收',
+    idempotency_key: 'cross-workspace-enabled-001',
+  }, { agent: source, signal: new AbortController().signal })
+  assert.equal(result.ok, true)
+  assert.equal(otherWorkspace.inbox.length, 1)
+})
+
 test('controller tools register only in the supplied scoped context', async (t) => {
   const { source, store, api } = await fixture(t)
   const cleanup = registerControllerTools(source.ctx, api, store)
@@ -158,10 +244,16 @@ test('controller tools register only in the supplied scoped context', async (t) 
     'session_manage',
     'session_open',
     'session_operations',
+    'session_project_open',
+    'session_schedule_create',
+    'session_schedule_delete',
+    'session_schedule_list',
     'session_send',
     'session_status',
     'session_wait',
     'session_wait_many',
+    'session_workspace_add',
+    'session_workspace_list',
   ])
   await cleanup()
   assert.equal(source.tools.size, 0)
@@ -364,6 +456,125 @@ test('live recovery never scans lifecycle operations as relay sends', async (t) 
   })
   await reconcileOperation(ctx, store, store.get('lifecycle-not-a-send'))
   assert.equal(store.get('lifecycle-not-a-send').status, 'prepared')
+})
+
+test('controller creates, redacts, lists, and deletes native target schedules', async (t) => {
+  const { source, target, api, store } = await fixture(t)
+  installFakeScheduleTools(target)
+  const exec = { agent: source, signal: new AbortController().signal }
+  const created = await api.createSchedule({
+    target_id: target.id,
+    prompt: 'SCHEDULE-SECRET',
+    after_seconds: 60,
+    idempotency_key: 'schedule-create-001',
+  }, exec)
+  assert.equal(created.ok, true)
+  assert.equal(created.operation.status, 'scheduled')
+  assert.equal(created.schedule.id, 'schedule-1')
+
+  const redacted = await api.listSchedules({ target_id: target.id }, exec)
+  assert.equal(redacted.count, 1)
+  assert.equal(redacted.schedules[0].prompt, undefined)
+  assert.equal(typeof redacted.schedules[0].prompt_sha256, 'string')
+  const revealed = await api.listSchedules({ target_id: target.id, include_prompt: true }, exec)
+  assert.equal(revealed.schedules[0].prompt, 'SCHEDULE-SECRET')
+
+  const deleted = await api.deleteSchedule({
+    target_id: target.id,
+    schedule_id: 'schedule-1',
+    idempotency_key: 'schedule-delete-001',
+  }, exec)
+  assert.equal(deleted.ok, true)
+  assert.equal(deleted.result.deleted, true)
+  assert.equal(store.get(created.operation.operation_id).status, 'completed')
+  assert.equal((await api.listSchedules({ target_id: target.id }, exec)).count, 0)
+})
+
+test('uncertain native schedule persistence is never retried blindly', async (t) => {
+  const { source, target, api, store } = await fixture(t)
+  let createCalls = 0
+  target.tools.set('schedule_create', {
+    async execute() {
+      createCalls += 1
+      return {
+        code: 'persistence_uncertain',
+        id: 'schedule-uncertain',
+        message: 'simulated flush uncertainty',
+      }
+    },
+  })
+  const args = {
+    target_id: target.id,
+    prompt: 'UNCERTAIN-SCHEDULE',
+    after_seconds: 60,
+    idempotency_key: 'schedule-uncertain-001',
+  }
+  const exec = { agent: source, signal: new AbortController().signal }
+  const first = await api.createSchedule(args, exec)
+  assert.equal(first.ok, false)
+  assert.equal(first.uncertain, true)
+  assert.equal(first.operation.status, 'delivery-unknown')
+  assert.equal(first.operation.needs_attention, true)
+
+  const duplicate = await api.createSchedule(args, exec)
+  assert.equal(duplicate.duplicate, true)
+  assert.equal(duplicate.operation.operation_id, first.operation.operation_id)
+  assert.equal(createCalls, 1)
+  assert.equal(store.get(first.operation.operation_id).status, 'delivery-unknown')
+})
+
+test('project open creates a directory, registers its workspace, and attaches a new session', async (t) => {
+  const { source, agents, api, ctx } = await fixture(t)
+  const root = await mkdtemp(path.join(os.tmpdir(), 'dsh-project-open-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const projectPath = path.join(root, 'new-project')
+  const result = await api.openProject({
+    path: projectPath,
+    title: 'New Project',
+    idempotency_key: 'project-open-001',
+  }, { agent: source, signal: new AbortController().signal })
+  assert.equal(result.ok, true)
+  assert.equal(result.directory_created, true)
+  assert.equal((await stat(projectPath)).isDirectory(), true)
+  assert.equal(ctx.workspaceRegistry.list().length, 1)
+  assert.equal(ctx.workspaceRegistry.list()[0].title, 'New Project')
+  assert.deepEqual(ctx.workspaceRegistry.list()[0].sessionIds, [result.session_id])
+  assert.equal(agents.find((agent) => agent.id === result.session_id).session.header.cwd, projectPath)
+
+  const duplicate = await api.openProject({
+    path: projectPath,
+    title: 'New Project',
+    idempotency_key: 'project-open-001',
+  }, { agent: source, signal: new AbortController().signal })
+  assert.equal(duplicate.duplicate, true)
+  assert.equal(duplicate.session_id, result.session_id)
+})
+
+test('project open reports attach failure as partial without hiding created state', async (t) => {
+  const { source, agents, api, ctx, store } = await fixture(t)
+  const root = await mkdtemp(path.join(os.tmpdir(), 'dsh-project-partial-'))
+  t.after(() => rm(root, { recursive: true, force: true }))
+  const projectPath = path.join(root, 'partial-project')
+  const createWorkspace = ctx.workspaceRegistry.create.bind(ctx.workspaceRegistry)
+  ctx.workspaceRegistry.create = async (...args) => {
+    const workspace = await createWorkspace(...args)
+    workspace.attachSession = async () => {
+      throw new Error('simulated attach failure')
+    }
+    return workspace
+  }
+
+  const result = await api.openProject({
+    path: projectPath,
+    idempotency_key: 'project-partial-001',
+  }, { agent: source, signal: new AbortController().signal })
+  assert.equal(result.ok, false)
+  assert.equal(result.partial, true)
+  assert.match(result.error, /simulated attach failure/)
+  assert.equal((await stat(projectPath)).isDirectory(), true)
+  assert.equal(ctx.workspaceRegistry.list().length, 1)
+  assert.equal(agents.some((agent) => agent.id === result.session_id), true)
+  assert.equal(store.get(result.operation.operation_id).status, 'partial')
 })
 
 test('status and paged events can inspect same-workspace cold sessions without resuming', async (t) => {

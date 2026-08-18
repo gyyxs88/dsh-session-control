@@ -45,6 +45,27 @@ test('approval reason binds target, preview, hash and idempotency key', () => {
   assert.match(reason, /acceptance-001/u)
 })
 
+test('schedule and project approvals bind future side effects', () => {
+  const schedule = approvalReason('session_schedule_create', {
+    target_id: 'session-target',
+    prompt: '在未来执行检查',
+    after_seconds: 60,
+    idempotency_key: 'schedule-approval-001',
+  })
+  assert.match(schedule, /session-target/u)
+  assert.match(schedule, /after=60s/u)
+  assert.match(schedule, new RegExp(contentHash('在未来执行检查'), 'u'))
+  assert.match(schedule, /schedule-approval-001/u)
+
+  const project = approvalReason('session_project_open', {
+    path: 'D:\\Project\\NewApp',
+    idempotency_key: 'project-approval-001',
+  })
+  assert.match(project, /D:\\Project\\NewApp/u)
+  assert.match(project, /递归创建/u)
+  assert.match(project, /project-approval-001/u)
+})
+
 test('open relay turn is detected from durable message provenance', () => {
   const agent = {
     session: {
@@ -96,4 +117,23 @@ test('tool result content is exposed only when approved content is requested', (
   }
   assert.equal(summarizeEvent(event, false).text, undefined)
   assert.equal(summarizeEvent(event, true).text, 'SECRET-RESULT')
+})
+
+test('schedule event prompt is redacted unless content access was approved', () => {
+  const event = {
+    seq: 9,
+    type: 'schedule/change',
+    data: {
+      version: 1,
+      operation: 'create',
+      schedule: {
+        id: 'schedule-1',
+        kind: 'after',
+        prompt: 'PRIVATE-REMINDER',
+        scheduledAt: '2026-08-18T12:00:00.000Z',
+      },
+    },
+  }
+  assert.equal(summarizeEvent(event, false).prompt, undefined)
+  assert.equal(summarizeEvent(event, true).prompt, 'PRIVATE-REMINDER')
 })
