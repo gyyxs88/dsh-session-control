@@ -30,6 +30,13 @@ test('relay envelope cannot be closed by caller content', () => {
   assert.equal(envelope.match(/<\/dsh-session-relay>/gu)?.length, 1)
   assert.match(envelope, /\\u003c\/dsh-session-relay>/u)
   assert.match(envelope, /approved-once-by-human-at-source/u)
+
+  const autonomous = relayEnvelope({
+    ...operation,
+    deliveryAuthorization: 'delegated-by-danger-full-access-controller',
+  }, 'autonomous')
+  assert.match(autonomous, /delegated-by-danger-full-access-controller/u)
+  assert.doesNotMatch(autonomous, /approved-once-by-human-at-source/u)
 })
 
 test('approval reason binds target, preview, hash and idempotency key', () => {

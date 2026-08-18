@@ -14,3 +14,4 @@
         maxPendingPerSource: 10
         rateLimitPerMinute: 5
         maxOperations: 500
+        approvalDelegationTimeoutMs: 900000

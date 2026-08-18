@@ -6,6 +6,7 @@ import test from 'node:test'
 
 import {
   apply,
+  createApprovalBroker,
   makeApi,
   publicOperation,
   reconcileOperation,
@@ -23,6 +24,7 @@ function makeAgent(id, cwd, { status = 'idle', events = [] } = {}) {
   }
   const tools = new Map()
   const session = {
+    id,
     header: { id, cwd },
     events,
     append(type, data) {
@@ -48,6 +50,10 @@ function makeAgent(id, cwd, { status = 'idle', events = [] } = {}) {
     },
     tools,
     followup(message) {
+      inbox.push(message)
+      this.status = 'running'
+    },
+    steer(message) {
       inbox.push(message)
       this.status = 'running'
     },
@@ -257,10 +263,246 @@ test('cross-workspace cold discovery expands persistence with Workspace registry
   assert.equal(discovered.cwd, 'D:\\cold-project')
 })
 
+test('full-access controller decides a delegated target approval exactly once', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'dsh-approval-broker-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const store = await new OperationStore({ stateDir: directory, maxOperations: 50 }).load()
+  t.after(() => store.dispose())
+  const source = makeAgent('controller', 'D:\\work')
+  const target = makeAgent('target', 'D:\\work')
+  const ctx = {
+    logger: { warn() {} },
+    agents: {
+      get: (id) => [source, target].find((agent) => agent.id === id),
+      list: () => [source, target],
+      isOwnedBy: () => false,
+    },
+    permissionPresets: { current: () => 'danger-full-access' },
+  }
+  const broker = createApprovalBroker(ctx, store, new Set([source.id]), {
+    timeoutMs: 60000,
+    confirmationTimeoutMs: 1000,
+  })
+  t.after(() => broker.dispose())
+  const now = new Date().toISOString()
+  const operation = await store.add({
+    id: 'managed-resume-1',
+    kind: 'lifecycle',
+    action: 'resume',
+    parentId: null,
+    childIds: [],
+    sourceId: source.id,
+    sourceCwd: source.session.header.cwd,
+    targetId: target.id,
+    targetCwd: target.session.header.cwd,
+    idempotencyKey: 'managed-resume-key-1',
+    contentHash: 'managed-resume-hash',
+    messageId: '',
+    status: 'completed',
+    turn: null,
+    attention: null,
+    createdAt: now,
+    updatedAt: now,
+  })
+  target.session.append('turn/start', { turn: 1 })
+  target.session.append('approval/asked', {
+    id: 'approval-delegated-1',
+    toolName: 'pwsh',
+    callId: 'call-delegated-1',
+    reason: 'write outside target workspace',
+  })
+  let childUiCalls = 0
+  const request = broker.handleRequest({
+    agent: target,
+    toolName: 'pwsh',
+    callId: 'call-delegated-1',
+    reason: 'write outside target workspace',
+    signal: new AbortController().signal,
+  }, async () => {
+    childUiCalls += 1
+    return 'rejected'
+  })
+  const listed = broker.list(source)
+  assert.equal(listed.delegation_enabled, true)
+  assert.equal(listed.count, 1)
+  assert.equal(source.inbox.length, 1)
+  assert.equal(source.inbox[0].source.form, 'approval-notice')
+
+  request.then(async (outcome) => {
+    const decided = target.session.append('approval/decided', {
+      id: 'approval-delegated-1',
+      outcome,
+    })
+    await broker.observeDecision(target.session, decided)
+  })
+  const args = {
+    approval_id: 'approval-delegated-1',
+    approval_fingerprint: listed.approvals[0].approval_fingerprint,
+    outcome: 'allowed-once',
+    idempotency_key: 'approval-decision-001',
+  }
+  await assert.rejects(() => broker.decide(source, {
+    ...args,
+    approval_fingerprint: 'stale-fingerprint',
+    idempotency_key: 'approval-decision-stale-001',
+  }), /fingerprint/u)
+  const decided = await broker.decide(source, args)
+  assert.equal(decided.ok, true, JSON.stringify(decided))
+  assert.equal(decided.confirmed, true)
+  assert.equal(decided.operation.approval_outcome, 'allowed-once')
+  assert.equal(childUiCalls, 0)
+  const duplicate = await broker.decide(source, args)
+  assert.equal(duplicate.duplicate, true)
+  assert.equal(duplicate.operation.operation_id, decided.operation.operation_id)
+})
+
+test('workspace-write controller leaves target approval in the child UI', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'dsh-approval-child-ui-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const store = await new OperationStore({ stateDir: directory, maxOperations: 50 }).load()
+  t.after(() => store.dispose())
+  const source = makeAgent('controller', 'D:\\work')
+  const target = makeAgent('target', 'D:\\work')
+  let preset = 'danger-full-access'
+  const ctx = {
+    logger: { warn() {} },
+    agents: {
+      get: (id) => [source, target].find((agent) => agent.id === id),
+      list: () => [source, target],
+      isOwnedBy: () => false,
+    },
+    permissionPresets: { current: () => preset },
+  }
+  const broker = createApprovalBroker(ctx, store, new Set([source.id]), { timeoutMs: 60000 })
+  t.after(() => broker.dispose())
+  const now = new Date().toISOString()
+  const operation = await store.add({
+    id: 'delegated-send-2',
+    kind: 'send',
+    parentId: null,
+    childIds: [],
+    sourceId: source.id,
+    sourceCwd: source.session.header.cwd,
+    targetId: target.id,
+    targetCwd: target.session.header.cwd,
+    idempotencyKey: 'delegated-send-key-2',
+    contentHash: 'delegated-send-hash-2',
+    messageId: 'relay-message-2',
+    status: 'running',
+    turn: 1,
+    attention: null,
+    createdAt: now,
+    updatedAt: now,
+  })
+  target.session.append('turn/start', { turn: 1 })
+  broker.routeFromOperation(operation, 1)
+  target.session.append('approval/asked', {
+    id: 'approval-delegated-2',
+    toolName: 'pwsh',
+    callId: 'call-delegated-2',
+  })
+  let childUiCalls = 0
+  const request = broker.handleRequest({
+    agent: target,
+    toolName: 'pwsh',
+    callId: 'call-delegated-2',
+    signal: new AbortController().signal,
+  }, async () => {
+    childUiCalls += 1
+    return 'rejected'
+  })
+  assert.equal(broker.list(source).count, 1)
+  preset = 'workspace-write'
+  broker.fallbackSource(source.id)
+  assert.equal(await request, 'rejected')
+  assert.equal(childUiCalls, 1)
+  const listed = broker.list(source)
+  assert.equal(listed.delegation_enabled, false)
+  assert.equal(listed.handling, 'child-session-ui')
+  assert.equal(listed.count, 0)
+})
+
+test('scheduled autonomous turn routes approval back to its full-access controller', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'dsh-schedule-approval-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const store = await new OperationStore({ stateDir: directory, maxOperations: 50 }).load()
+  t.after(() => store.dispose())
+  const source = makeAgent('controller', 'D:\\work')
+  const target = makeAgent('target', 'D:\\scheduled')
+  let preset = 'danger-full-access'
+  const ctx = {
+    logger: { warn() {} },
+    agents: {
+      get: (id) => [source, target].find((agent) => agent.id === id),
+      list: () => [source, target],
+      isOwnedBy: () => false,
+    },
+    permissionPresets: { current: () => preset },
+  }
+  const broker = createApprovalBroker(ctx, store, new Set([source.id]), { timeoutMs: 60000 })
+  t.after(() => broker.dispose())
+  const now = new Date().toISOString()
+  const operation = await store.add({
+    id: 'schedule-operation-1',
+    kind: 'schedule',
+    action: 'create',
+    parentId: null,
+    childIds: [],
+    sourceId: source.id,
+    sourceCwd: source.session.header.cwd,
+    targetId: target.id,
+    targetCwd: target.session.header.cwd,
+    idempotencyKey: 'schedule-route-key-1',
+    contentHash: 'schedule-route-hash-1',
+    messageId: '',
+    scheduleId: 'schedule-42',
+    status: 'completed',
+    turn: null,
+    attention: null,
+    createdAt: now,
+    updatedAt: now,
+  })
+  target.session.append('turn/start', { turn: 8 })
+  const reminder = {
+    id: 'schedule-message-1',
+    content: [{
+      type: 'text',
+      text: '[SCHEDULE REMINDER]\nschedule_id_json: "schedule-42"\nreminder_prompt_json: "continue"',
+    }],
+    source: { kind: 'plugin', plugin: 'schedule' },
+  }
+  target.session.append('user/message', reminder)
+  assert.equal(broker.routeFromMessage(target.session, reminder), true)
+  target.session.append('approval/asked', {
+    id: 'approval-schedule-1',
+    toolName: 'pwsh',
+    callId: 'schedule-call-1',
+  })
+  let childUiCalls = 0
+  const request = broker.handleRequest({
+    agent: target,
+    toolName: 'pwsh',
+    callId: 'schedule-call-1',
+    signal: new AbortController().signal,
+  }, async () => {
+    childUiCalls += 1
+    return 'rejected'
+  })
+  const listed = broker.list(source)
+  assert.equal(listed.count, 1)
+  assert.deepEqual(listed.approvals[0].operation_ids, [operation.id])
+  preset = 'workspace-write'
+  broker.fallbackSource(source.id)
+  assert.equal(await request, 'rejected')
+  assert.equal(childUiCalls, 1)
+})
+
 test('controller tools register only in the supplied scoped context', async (t) => {
   const { source, store, api } = await fixture(t)
   const cleanup = registerControllerTools(source.ctx, api, store)
   assert.deepEqual([...source.tools.keys()].sort(), [
+    'session_approval_decide',
+    'session_approval_list',
     'session_batch_send',
     'session_cancel',
     'session_events',
@@ -642,6 +884,7 @@ test('host apply mounts tools only for configured controller and asks with bound
   const agents = [source, target]
   const listeners = new Map()
   const cleanups = []
+  let permissionPreset = 'workspace-write'
   const ctx = {
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     agents: {
@@ -652,6 +895,7 @@ test('host apply mounts tools only for configured controller and asks with bound
     sessions: { async flush() {} },
     sessionPersistence: { async inspect() { return { events: [] } } },
     systemPrompt: { section() { return () => {} } },
+    permissionPresets: { current() { return permissionPreset } },
     tools: { get: (name, agent) => agent.tools.get(name) },
     on(event, listener) {
       const rows = listeners.get(event) ?? []
@@ -680,6 +924,7 @@ test('host apply mounts tools only for configured controller and asks with bound
     maxPendingPerSource: 10,
     rateLimitPerMinute: 5,
     maxOperations: 50,
+    approvalDelegationTimeoutMs: 60000,
   })
   assert.equal(source.tools.has('session_send'), true)
   assert.equal(target.tools.has('session_send'), false)
@@ -697,6 +942,21 @@ test('host apply mounts tools only for configured controller and asks with bound
   assert.equal(decision.kind, 'ask')
   assert.match(decision.reason, /VISIBLE-CONTENT/u)
   assert.match(decision.reason, /approval-test-001/u)
+
+  permissionPreset = 'danger-full-access'
+  const autonomousExec = {
+    name: 'session_send',
+    agent: source,
+    arguments: {
+      target_id: target.id,
+      content: 'AUTONOMOUS-CONTENT',
+      idempotency_key: 'autonomous-test-001',
+    },
+  }
+  const autonomous = preExecute(autonomousExec, () => ({ kind: 'allow' }))
+  assert.equal(autonomous.kind, 'allow')
+  await source.tools.get('session_send').execute(autonomousExec.arguments, autonomousExec)
+  assert.match(target.inbox.at(-1).content[0].text, /delegated-by-danger-full-access-controller/u)
 
   for (const cleanup of cleanups.toReversed()) await cleanup?.()
   assert.equal(source.tools.size, 0)
