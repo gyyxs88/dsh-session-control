@@ -4,17 +4,29 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
-import { apply, makeApi, registerControllerTools } from '../lib/index.js'
+import {
+  apply,
+  makeApi,
+  publicOperation,
+  reconcileOperation,
+  registerControllerTools,
+} from '../lib/index.js'
 import { OperationStore } from '../lib/state-store.js'
 
 function makeAgent(id, cwd, { status = 'idle', events = [] } = {}) {
   const inbox = []
+  inbox.remove = (messageId) => {
+    const index = inbox.findIndex((message) => message.id === messageId)
+    if (index < 0) return false
+    inbox.splice(index, 1)
+    return true
+  }
   const tools = new Map()
   return {
     id,
     status,
     options: { provider: 'test', model: 'test-model' },
-    session: { header: { cwd }, events },
+    session: { header: { id, cwd }, events },
     inbox,
     ctx: {
       tools: {
@@ -51,17 +63,41 @@ async function fixture(t) {
       get: (id) => agents.find((agent) => agent.id === id),
       list: () => [...agents],
       isOwnedBy: () => false,
+      async create(options) {
+        const agent = makeAgent(options.sessionId, options.meta?.cwd)
+        agent.options = options.agentOptions ?? {}
+        agent.session.header = { id: options.sessionId, ...options.meta }
+        if (options.seed !== undefined) agent.session.events.push(...options.seed)
+        agents.push(agent)
+        await options.setup?.(agent.ctx)
+        return {
+          agent,
+          async dispose() {
+            const index = agents.indexOf(agent)
+            if (index >= 0) agents.splice(index, 1)
+          },
+        }
+      },
     },
     sessions: { async flush() {} },
+    get() { return undefined },
+    sessionPersistence: {
+      async list() { return [] },
+      async inspect(id) {
+        throw new Error(`missing persisted session ${id}`)
+      },
+    },
   }
   const config = {
     sameWorkspaceOnly: true,
     maxPendingPerTarget: 3,
     maxPendingPerSource: 10,
     rateLimitPerMinute: 5,
+    maxOperations: 50,
   }
-  const api = makeApi(ctx, config, store, new Set(['controller', 'second-controller']))
-  return { source, target, otherWorkspace, store, api }
+  const lifecycle = { ownedHandles: new Map(), overrides: new Map() }
+  const api = makeApi(ctx, config, store, new Set(['controller', 'second-controller']), lifecycle)
+  return { source, target, otherWorkspace, agents, store, api, ctx, config, lifecycle }
 }
 
 test('send captures pre-followup status and is idempotent', async (t) => {
@@ -115,15 +151,37 @@ test('controller tools register only in the supplied scoped context', async (t) 
   const { source, store, api } = await fixture(t)
   const cleanup = registerControllerTools(source.ctx, api, store)
   assert.deepEqual([...source.tools.keys()].sort(), [
+    'session_batch_send',
+    'session_cancel',
     'session_events',
     'session_interrupt',
+    'session_manage',
+    'session_open',
     'session_operations',
     'session_send',
     'session_status',
     'session_wait',
+    'session_wait_many',
   ])
   await cleanup()
   assert.equal(source.tools.size, 0)
+})
+
+test('terminal public operations never expose stale attention', () => {
+  const row = publicOperation({
+    id: 'terminal-with-stale-attention',
+    kind: 'lifecycle',
+    sourceId: 'controller',
+    targetId: 'target',
+    idempotencyKey: 'terminal-attention-001',
+    contentHash: 'hash',
+    status: 'completed',
+    attention: { kind: 'offline', reason: 'stale' },
+    createdAt: '2026-08-18T00:00:00.000Z',
+    updatedAt: '2026-08-18T00:00:01.000Z',
+  })
+  assert.equal(row.needs_attention, false)
+  assert.equal(row.attention, null)
 })
 
 test('relay-started controller turn is denied even for an authorized id', async (t) => {
@@ -160,6 +218,185 @@ test('pending capacity and persistent rate limits fail closed', async (t) => {
     content: 'overflow',
     idempotency_key: 'pending-overflow',
   }, exec), /未完成操作已达上限/u)
+})
+
+test('batch send creates a durable parent graph and is idempotent', async (t) => {
+  const { source, target, store, api } = await fixture(t)
+  const exec = { agent: source, signal: new AbortController().signal }
+  const args = {
+    idempotency_key: 'batch-parent-001',
+    items: [
+      { target_id: target.id, content: 'task one', idempotency_key: 'batch-child-001' },
+      { target_id: target.id, content: 'task two', idempotency_key: 'batch-child-002' },
+    ],
+  }
+  const first = await api.batchSend(args, exec)
+  assert.equal(first.ok, true)
+  assert.equal(first.operation.kind, 'batch')
+  assert.equal(first.children.length, 2)
+  assert.equal(target.inbox.length, 2)
+  const parentId = first.operation.operation_id
+  const childIds = store.get(parentId).childIds
+  assert.equal(childIds.length, 2)
+
+  const duplicate = await api.batchSend(args, exec)
+  assert.equal(duplicate.duplicate, true)
+  assert.equal(duplicate.operation.operation_id, parentId)
+  assert.equal(target.inbox.length, 2)
+
+  for (const childId of childIds) await store.update(childId, { status: 'completed' })
+  assert.equal(store.get(parentId).status, 'completed')
+})
+
+test('wait many returns terminal or attention changes with a durable cursor', async (t) => {
+  const { source, target, store, api } = await fixture(t)
+  const exec = { agent: source, signal: new AbortController().signal }
+  const sent = await api.send({
+    target_id: target.id,
+    content: 'wait-many',
+    idempotency_key: 'wait-many-001',
+  }, exec)
+  const id = sent.operation.operation_id
+  await store.update(id, {
+    status: 'awaiting-approval',
+    attention: { kind: 'approval', approvals: [{ id: 'approval-1' }] },
+  })
+  const first = await api.waitMany({ operation_ids: [id], timeout_ms: 0 }, exec)
+  assert.equal(first.timed_out, false)
+  assert.equal(first.triggered_operation_id, id)
+  assert.equal(first.operations[0].needs_attention, true)
+  const second = await api.waitMany({
+    operation_ids: [id],
+    after_cursor: first.cursor,
+    timeout_ms: 0,
+  }, exec)
+  assert.equal(second.timed_out, true)
+  await assert.rejects(() => api.waitMany({
+    operation_ids: [id],
+    after_cursor: 'broken',
+    timeout_ms: 0,
+  }, exec), /cursor/u)
+})
+
+test('cancel removes only the exact queued operation', async (t) => {
+  const { source, target, store, api } = await fixture(t)
+  const exec = { agent: source, signal: new AbortController().signal }
+  const sent = await api.send({
+    target_id: target.id,
+    content: 'cancel exact',
+    idempotency_key: 'cancel-exact-001',
+  }, exec)
+  const result = await api.cancelOperations({
+    operation_ids: [sent.operation.operation_id],
+    reason: 'test cancellation',
+  }, exec)
+  assert.equal(result.results[0].outcome, 'removed-from-inbox')
+  assert.equal(target.inbox.length, 0)
+  assert.equal(store.get(sent.operation.operation_id).status, 'discarded')
+})
+
+test('session open creates and forks through the core factory with idempotency', async (t) => {
+  const { source, agents, api, ctx, lifecycle } = await fixture(t)
+  const exec = { agent: source, signal: new AbortController().signal }
+  ctx.llm = { async resolveCallConfig(config) { return config } }
+  const created = await api.openSession({
+    mode: 'create',
+    idempotency_key: 'open-create-001',
+    reasoning_effort: 'high',
+  }, exec)
+  assert.equal(created.ok, true)
+  assert.equal(created.workspace_isolated, false)
+  assert.equal(created.reasoning_effort, 'high')
+  assert.equal(lifecycle.overrides.get(created.session_id).reasoningEffort, 'high')
+  assert.equal(agents.some((agent) => agent.id === created.session_id), true)
+  const duplicate = await api.openSession({
+    mode: 'create',
+    idempotency_key: 'open-create-001',
+    reasoning_effort: 'high',
+  }, exec)
+  assert.equal(duplicate.duplicate, true)
+  assert.equal(duplicate.session_id, created.session_id)
+  const suspended = await api.manageSession({
+    action: 'suspend',
+    target_id: created.session_id,
+    idempotency_key: 'manage-suspend-001',
+  }, exec)
+  assert.equal(suspended.status, 'cold')
+  assert.equal(suspended.operation.status, 'completed')
+  assert.equal(suspended.operation.attention, null)
+  assert.equal(suspended.operation.needs_attention, false)
+  assert.equal(agents.some((agent) => agent.id === created.session_id), false)
+
+  source.session.events.push(
+    { seq: 0, type: 'turn/start', data: { turn: 1 } },
+    { seq: 1, type: 'user/message', data: { id: 'u-1' } },
+    { seq: 2, type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } },
+  )
+  const forked = await api.openSession({
+    mode: 'fork',
+    source_session_id: source.id,
+    idempotency_key: 'open-fork-001',
+  }, exec)
+  assert.equal(forked.ok, true)
+  const child = agents.find((agent) => agent.id === forked.session_id)
+  assert.equal(child.session.header.parentSession, source.id)
+  assert.equal(child.session.events.length, 3)
+})
+
+test('live recovery never scans lifecycle operations as relay sends', async (t) => {
+  const { source, target, ctx, store } = await fixture(t)
+  const now = new Date().toISOString()
+  await store.add({
+    id: 'lifecycle-not-a-send',
+    kind: 'lifecycle',
+    parentId: null,
+    childIds: [],
+    sourceId: source.id,
+    sourceCwd: source.session.header.cwd,
+    targetId: target.id,
+    targetCwd: target.session.header.cwd,
+    idempotencyKey: 'lifecycle-recovery-001',
+    contentHash: 'lifecycle-hash',
+    messageId: '',
+    status: 'prepared',
+    createdAt: now,
+    updatedAt: now,
+  })
+  await reconcileOperation(ctx, store, store.get('lifecycle-not-a-send'))
+  assert.equal(store.get('lifecycle-not-a-send').status, 'prepared')
+})
+
+test('status and paged events can inspect same-workspace cold sessions without resuming', async (t) => {
+  const { source, ctx, store, api } = await fixture(t)
+  const coldHeader = { id: 'cold-session', cwd: 'D:\\work' }
+  const coldEvents = [
+    { seq: 0, type: 'turn/start', data: { turn: 1 } },
+    { seq: 1, type: 'user/message', data: { id: 'cold-u-1', content: [{ type: 'text', text: 'one' }] } },
+    { seq: 2, type: 'assistant/message', data: { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'two' }] } } },
+    { seq: 3, type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } },
+  ]
+  ctx.sessionPersistence.list = async () => [coldHeader]
+  ctx.sessionPersistence.inspect = async (id) => {
+    assert.equal(id, coldHeader.id)
+    return { meta: coldHeader, events: coldEvents }
+  }
+  const cleanup = registerControllerTools(source.ctx, api, store)
+  const exec = { agent: source, signal: new AbortController().signal }
+  const status = await source.tools.get('session_status').execute({ include_cold: true }, exec)
+  assert.equal(status.sessions.some((row) => row.id === coldHeader.id && row.status === 'cold'), true)
+  const page = await source.tools.get('session_events').execute({
+    target_id: coldHeader.id,
+    limit: 2,
+  }, exec)
+  assert.deepEqual(page.events.map((event) => event.seq), [2, 3])
+  assert.equal(page.page.has_older, true)
+  const older = await source.tools.get('session_events').execute({
+    target_id: coldHeader.id,
+    limit: 2,
+    before_seq: page.page.older_before_seq,
+  }, exec)
+  assert.deepEqual(older.events.map((event) => event.seq), [0, 1])
+  await cleanup()
 })
 
 test('host apply mounts tools only for configured controller and asks with bound reason', async (t) => {

@@ -1,6 +1,6 @@
 {
   "name": "dsh-session-control",
-  "version": "0.1.0",
+  "version": "0.2.3",
   "description": "Authorized, durable cross-session control for DeepSeek Harness",
   "keywords": [
     "deepseek-harness",

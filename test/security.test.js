@@ -8,6 +8,8 @@ import {
   currentTurnIsRelay,
   relayEnvelope,
   sameWorkspace,
+  sessionAttention,
+  summarizeEvent,
 } from '../lib/security.js'
 
 test('workspace comparison is canonical and rejects missing paths', () => {
@@ -62,4 +64,36 @@ test('open relay turn is detected from durable message provenance', () => {
   assert.equal(currentTurnIsRelay(agent), true)
   agent.session.events.push({ type: 'turn/end', data: { turn: 2 } })
   assert.equal(currentTurnIsRelay(agent), false)
+})
+
+test('session attention distinguishes approvals and user questions', () => {
+  const approval = sessionAttention([
+    { type: 'approval/asked', data: { id: 'a-1', toolName: 'pwsh' } },
+  ])
+  assert.equal(approval.kind, 'approval')
+  assert.equal(approval.needs_attention, true)
+  const cleared = sessionAttention([
+    { type: 'approval/asked', data: { id: 'a-1', toolName: 'pwsh' } },
+    { type: 'approval/decided', data: { id: 'a-1', outcome: 'allowed-once' } },
+  ])
+  assert.equal(cleared.needs_attention, false)
+  const question = sessionAttention([
+    { type: 'tool/call', data: { callId: 'q-1', name: 'ask_user_question', turn: 1 } },
+  ])
+  assert.equal(question.kind, 'user-input')
+})
+
+test('tool result content is exposed only when approved content is requested', () => {
+  const event = {
+    seq: 3,
+    type: 'tool/result',
+    data: {
+      turn: 1,
+      step: 2,
+      callId: 'call-1',
+      message: { content: [{ type: 'text', text: 'SECRET-RESULT' }] },
+    },
+  }
+  assert.equal(summarizeEvent(event, false).text, undefined)
+  assert.equal(summarizeEvent(event, true).text, 'SECRET-RESULT')
 })
