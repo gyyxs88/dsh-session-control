@@ -233,6 +233,30 @@ test('cross-workspace control is enabled when the deployment switch is false', a
   assert.equal(otherWorkspace.inbox.length, 1)
 })
 
+test('cross-workspace cold discovery expands persistence with Workspace registry membership', async (t) => {
+  const { source, api, config, ctx, store } = await fixture(t)
+  config.sameWorkspaceOnly = false
+  const workspace = await ctx.workspaceRegistry.create('D:\\cold-project', 'Cold Project')
+  await workspace.attachSession('cold-other-workspace')
+  ctx.sessionPersistence.list = async () => []
+  ctx.sessionPersistence.inspect = async (id) => {
+    assert.equal(id, 'cold-other-workspace')
+    return {
+      meta: { id, cwd: 'D:\\cold-project' },
+      events: [{ seq: 7, type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } }],
+    }
+  }
+  const cleanup = registerControllerTools(source.ctx, api, store)
+  const result = await source.tools.get('session_status').execute({ include_cold: true }, {
+    agent: source,
+    signal: new AbortController().signal,
+  })
+  await cleanup()
+  const discovered = result.sessions.find((session) => session.id === 'cold-other-workspace')
+  assert.equal(discovered.status, 'cold')
+  assert.equal(discovered.cwd, 'D:\\cold-project')
+})
+
 test('controller tools register only in the supplied scoped context', async (t) => {
   const { source, store, api } = await fixture(t)
   const cleanup = registerControllerTools(source.ctx, api, store)
