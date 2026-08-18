@@ -1,0 +1,13 @@
+# Safe by default: no session receives control tools until its durable session
+# id is explicitly listed by the deployment patch that loads this bundle.
+- insert:
+    - id: authorized-session-control
+      name: 'dsh-session-control'
+      config:
+        controllerSessionIds: []
+        stateDir: '.dsh-session-control'
+        sameWorkspaceOnly: true
+        maxPendingPerTarget: 3
+        maxPendingPerSource: 10
+        rateLimitPerMinute: 5
+        maxOperations: 500

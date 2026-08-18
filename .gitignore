@@ -1,0 +1,6 @@
+node_modules/
+coverage/
+.dsh-session-control/
+*.tgz
+*.log
+.DS_Store
