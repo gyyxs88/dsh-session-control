@@ -9,6 +9,7 @@
 - **执行时重复鉴权**：工具可见性只是界面边界；每次执行仍校验精确 controller id、普通会话、非 self、非 subagent；当前默认允许同一 DSH Host 内跨工作区控制，投递和运行态管理仍要求目标为 live。
 - **权限预设决定授权方式**：Workspace Write 控制器的副作用继续走 `tools/pre-execute → ask`；只有当前原生预设确认为 `danger-full-access` 的控制器可自主执行。判定读取 DSH 会话事件折叠结果，不接受消息自报。
 - **子会话审批不错误集中**：仅由 `danger-full-access` 控制器创建/恢复的受管会话，以及该控制器发起的 relay / Schedule 轮次，可把目标审批路由回来源控制器；Workspace Write 控制器不截获，人工审批卡保留在子会话 UI。
+- **权限调整按方向授权**：Full access 控制器可自主升降子会话权限；Workspace Write 控制器调整到 `read-only` / `workspace-write` 时在来源审批，提升为 `danger-full-access` 时必须在目标子会话 UI 人工审批。
 - **中继降权**：目标系统提示明确把 `<dsh-session-relay>` 视作不受信委派；正文 JSON 会转义 `<`，不能闭合包裹。中继触发的轮次不能调用任何会话控制工具。
 - **单向编排**：目标默认没有控制工具；即使目标也是 controller，中继轮也会被 Host 拒绝，阻断 A→B→A 自动循环。
 
@@ -29,6 +30,8 @@
 | `session_schedule_create` | 按权限预设授权后创建原生持久 after/at/every 定时任务 |
 | `session_schedule_list` | 查看 live/cold 会话定时任务；正文默认按哈希隐藏 |
 | `session_schedule_delete` | 按权限预设授权后删除目标会话定时任务 |
+| `session_permission_get` | 读取 live/cold 子会话的原生权限预设、沙箱模式和审批策略 |
+| `session_permission_set` | 持久升降子会话权限；Workspace Write 请求 Full access 时在子会话 UI 审批 |
 | `session_approval_list` | 查看由当前 Full Access 控制器承接的子会话待审批项 |
 | `session_approval_decide` | Full Access 控制器按指纹自主批准一次或拒绝；决定幂等持久化 |
 | `session_workspace_list` | 列出 DSH 已注册工作区、目录状态与会话归属 |
@@ -36,7 +39,17 @@
 | `session_project_open` | 按权限预设授权后完成目录、Workspace、会话创建与 attach |
 | `session_operations` | 分页查看来源 controller 自己的持久 operation |
 
-`session_status(include_cold=true)` 可以同时列出当前授权范围内的持久 cold 会话。`session_events` 支持 `before_seq` / `after_seq` 分页并可直接读取 cold 历史；正文与工具参数/结果在 Workspace Write 下需人工审批，在 `danger-full-access` 下由控制器自主读取。`session_open` 可覆盖 provider、model 和 reasoning effort，覆盖值会先经 DSH LLM Core 精确校验。
+`session_status(include_cold=true)` 可以同时列出当前授权范围内的持久 cold 会话。`session_events` 支持 `before_seq` / `after_seq` 分页并可直接读取 cold 历史；正文与工具参数/结果在 Workspace Write 下需人工审批，在 `danger-full-access` 下由控制器自主读取。`session_open` 可覆盖 provider、model、reasoning effort 和初始权限，模型覆盖值会先经 DSH LLM Core 精确校验。
+
+## 子会话权限管理
+
+- `session_permission_get` 只读折叠目标的 `permission/preset`、`sandbox/mode` 和 `approval/policy`，读取 cold 会话时不会恢复它。
+- `session_permission_set` 只接受 `read-only`、`workspace-write`、`danger-full-access`，并把来源、目标、旧值、新值、原因、授权位置和幂等键记录为持久 `permission` operation。
+- Full access 控制器可自主升降 live/cold 子会话。Workspace Write 控制器调为 `read-only` 或 `workspace-write` 时走来源会话逐次审批；请求 `danger-full-access` 时不在主会话集中人工审批，而是向目标投递插件内部请求，在目标自己的开放 turn 内调用 DSH 原生 `approval.request()`。
+- 内部权限请求在 `agent/pre-step` 中处理并从进入模型的消息列表移除。批准前会再次核对来源权限和目标旧权限；任何变化都会零执行。只有目标返回 `allowed-once` 后才调用原生 `permissionPresets.apply()`，随后 flush 并验证折叠值。
+- cold 目标会临时 resume，结算后重新收敛为 cold。插件重启时只恢复尚未领取的内部请求；已经进入审批但未确认的请求标记失败且绝不重放。
+- `session_open` 和 `session_project_open` 支持 `permission_preset`。Workspace Write 创建 Full access 子会话时，先以受限权限创建，再在新子会话 UI 请求提升；父 operation 返回 `permission_operation`，可用 `session_wait` 独立等待。
+- 子会话切到 `danger-full-access` 后，其沙箱为完全访问且审批策略为 `never`，会自行运行而不再逐项请求主线程审批；需要逐项监督时应保留 `workspace-write`，由 Full access 主线程承接其请求。
 
 ## 主线程自主审批
 
@@ -65,7 +78,7 @@
 - 使用标准 UUID、正文 SHA-256 和来源绑定幂等键。
 - 用 `agent/inbox/claimed` / `agent/inbox/discarded` 的精确消息身份和 `session/event` 的 turn 坐标结算，不猜测任意 splice。
 - 状态写入 `stateDir` 下 A/B 双槽 v2 快照；每代 `fsync`，启动时选择最高有效 generation。v1 自动迁移，且两槽均损坏时拒绝启动。
-- DSH 重启后从 live Session 或 `sessionPersistence.inspect()` 对未完成 send operation 进行对账；不会自动重发无法确认的消息。被重启打断且无法证明终态的 lifecycle operation 会保留幂等键并转为 `delivery-unknown` / `needs_attention`，不会冒险重复创建或销毁。
+- DSH 重启后从 live Session 或 `sessionPersistence.inspect()` 对未完成 send / permission operation 进行对账；不会自动重发无法确认的消息或权限批准。被重启打断且无法证明终态的 lifecycle operation 会保留幂等键并转为 `delivery-unknown` / `needs_attention`，不会冒险重复创建或销毁。
 - 每次 durable mutation 都有单调 revision；多操作等待和审计分页使用 opaque cursor，已报告状态不会重复唤醒。
 - batch 父 operation 根据子 operation 自动汇总为 running、needs-attention、completed、partial、aborted 或 failed。
 - 每来源、每目标、每分钟和总 operation 数都有上限；终态 operation 会在容量紧张时按时间淘汰。
@@ -124,4 +137,4 @@ npm run check
 npm pack --dry-run
 ```
 
-测试覆盖：作用域可见性、跨工作区开关、中继轮阻断、Full Access 自主授权、Workspace Write 子会话本地审批、集中审批指纹/幂等/确认、Schedule 审批路由、并发幂等、批次父子汇总、cursor 多等待、精确取消、cold 历史分页、原生定时创建/隐藏/删除、项目目录与 Workspace/Session attach、Core 创建/fork/suspend、v1→v2 迁移、A/B 状态恢复和损坏双槽 fail-closed。
+测试覆盖：作用域可见性、跨工作区开关、中继轮阻断、Full Access 自主授权、Workspace Write 子会话本地审批、权限升降/方向授权/目标审批/冷会话/创建初始权限/幂等防重放、集中审批指纹/确认、Schedule 审批路由、并发幂等、批次父子汇总、cursor 多等待、精确取消、cold 历史分页、原生定时创建/隐藏/删除、项目目录与 Workspace/Session attach、Core 创建/fork/suspend、v1→v2 迁移、A/B 状态恢复和损坏双槽 fail-closed。

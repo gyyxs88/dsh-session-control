@@ -66,11 +66,24 @@ test('schedule and project approvals bind future side effects', () => {
 
   const project = approvalReason('session_project_open', {
     path: 'D:\\Project\\NewApp',
+    permission_preset: 'read-only',
     idempotency_key: 'project-approval-001',
   })
   assert.match(project, /D:\\Project\\NewApp/u)
   assert.match(project, /递归创建/u)
+  assert.match(project, /read-only/u)
   assert.match(project, /project-approval-001/u)
+
+  const permission = approvalReason('session_permission_set', {
+    target_id: 'session-target',
+    permission_preset: 'danger-full-access',
+    reason: '长期自主部署',
+    idempotency_key: 'permission-approval-001',
+  })
+  assert.match(permission, /session-target/u)
+  assert.match(permission, /danger-full-access/u)
+  assert.match(permission, /长期自主部署/u)
+  assert.match(permission, /permission-approval-001/u)
 })
 
 test('open relay turn is detected from durable message provenance', () => {

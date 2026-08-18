@@ -10,6 +10,7 @@ import {
   makeApi,
   publicOperation,
   reconcileOperation,
+  reconcilePermissionOperation,
   registerControllerTools,
 } from '../lib/index.js'
 import { OperationStore } from '../lib/state-store.js'
@@ -64,6 +65,41 @@ function makeAgent(id, cwd, { status = 'idle', events = [] } = {}) {
   }
 }
 
+function makePermissionRuntime(request = async () => 'rejected') {
+  const specs = {
+    'read-only': { sandbox: 'read-only', approval: 'ask' },
+    'workspace-write': { sandbox: 'workspace-write', approval: 'ask' },
+    'danger-full-access': { sandbox: 'danger-full-access', approval: 'never' },
+  }
+  const current = (events) => events.findLast((event) => event.type === 'permission/preset')
+    ?.data?.preset ?? 'workspace-write'
+  const approval = {
+    setPolicy(agent, policy) {
+      const previous = agent.session.events.findLast((event) => event.type === 'approval/policy')
+        ?.data?.policy
+      if (previous !== policy) agent.session.append('approval/policy', { policy })
+    },
+    request,
+  }
+  const permissionPresets = {
+    names: Object.keys(specs),
+    current,
+    resolve(name) {
+      const spec = specs[name]
+      if (spec === undefined) throw new Error(`unknown permission preset ${name}`)
+      return spec
+    },
+    apply(session, name, setApproval) {
+      const spec = this.resolve(name)
+      if (current(session.events) !== name) session.append('permission/preset', { preset: name })
+      const sandbox = session.events.findLast((event) => event.type === 'sandbox/mode')?.data?.mode
+      if (sandbox !== spec.sandbox) session.append('sandbox/mode', { mode: spec.sandbox })
+      setApproval(spec.approval)
+    },
+  }
+  return { approval, permissionPresets }
+}
+
 function installFakeScheduleTools(agent) {
   agent.tools.set('schedule_create', {
     async execute(args, exec) {
@@ -108,6 +144,7 @@ async function fixture(t) {
   const otherWorkspace = makeAgent('other', 'D:\\other')
   const agents = [source, target, otherWorkspace]
   const workspaces = []
+  const permissions = makePermissionRuntime()
   const store = await new OperationStore({ stateDir: directory, maxOperations: 50 }).load()
   t.after(() => store.dispose())
   const ctx = {
@@ -130,8 +167,28 @@ async function fixture(t) {
           },
         }
       },
+      async resume(options) {
+        const inspection = await ctx.sessionPersistence.inspect(options.resumeSessionId)
+        const agent = makeAgent(
+          options.resumeSessionId,
+          inspection.meta.cwd,
+          { events: [...inspection.events] },
+        )
+        agent.options = options.agentOptions ?? {}
+        agent.session.header = { ...inspection.meta }
+        agents.push(agent)
+        await options.setup?.(agent.ctx)
+        return {
+          agent,
+          async dispose() {
+            const index = agents.indexOf(agent)
+            if (index >= 0) agents.splice(index, 1)
+          },
+        }
+      },
     },
     sessions: { async flush() {} },
+    ...permissions,
     tools: { get: (name, agent) => agent.tools.get(name) },
     workspaceRegistry: {
       list: () => [...workspaces],
@@ -235,7 +292,7 @@ test('cross-workspace control is enabled when the deployment switch is false', a
     content: '跨工作区验收',
     idempotency_key: 'cross-workspace-enabled-001',
   }, { agent: source, signal: new AbortController().signal })
-  assert.equal(result.ok, true)
+  assert.equal(result.ok, true, JSON.stringify(result))
   assert.equal(otherWorkspace.inbox.length, 1)
 })
 
@@ -261,6 +318,246 @@ test('cross-workspace cold discovery expands persistence with Workspace registry
   const discovered = result.sessions.find((session) => session.id === 'cold-other-workspace')
   assert.equal(discovered.status, 'cold')
   assert.equal(discovered.cwd, 'D:\\cold-project')
+})
+
+test('full-access controller persistently raises and lowers child permission without replay', async (t) => {
+  const { source, target, api, ctx } = await fixture(t)
+  source.session.append('permission/preset', { preset: 'danger-full-access' })
+  const exec = { agent: source, signal: new AbortController().signal }
+  const raisedArgs = {
+    target_id: target.id,
+    permission_preset: 'danger-full-access',
+    reason: 'unattended build requires full access',
+    idempotency_key: 'permission-full-001',
+  }
+  const raised = await api.setPermission(raisedArgs, exec)
+  assert.equal(raised.ok, true)
+  assert.equal(raised.changed, true)
+  assert.equal(raised.operation.permission_authorization, 'autonomous-by-danger-full-access-controller')
+  assert.equal(ctx.permissionPresets.current(target.session.events), 'danger-full-access')
+
+  const lowered = await api.setPermission({
+    target_id: target.id,
+    permission_preset: 'read-only',
+    reason: 'work completed; reduce authority',
+    idempotency_key: 'permission-lower-001',
+  }, exec)
+  assert.equal(lowered.ok, true)
+  assert.equal(ctx.permissionPresets.current(target.session.events), 'read-only')
+
+  const duplicate = await api.setPermission(raisedArgs, exec)
+  assert.equal(duplicate.duplicate, true)
+  assert.equal(ctx.permissionPresets.current(target.session.events), 'read-only')
+  const viewed = await api.getPermission({ target_id: target.id }, exec)
+  assert.equal(viewed.permission_preset, 'read-only')
+  assert.equal(viewed.approval_policy, 'ask')
+})
+
+test('workspace-write Full access elevation is approved in the child turn and hidden from the model', async (t) => {
+  const { source, target, api, ctx, store } = await fixture(t)
+  let approvalAgent
+  let approvalReasonText
+  ctx.approval.request = async (request) => {
+    approvalAgent = request.agent
+    approvalReasonText = request.reason
+    return 'allowed-once'
+  }
+  const queued = await api.setPermission({
+    target_id: target.id,
+    permission_preset: 'danger-full-access',
+    reason: 'child needs autonomous deployment access',
+    idempotency_key: 'permission-child-ui-001',
+  }, { agent: source, signal: new AbortController().signal })
+  assert.equal(queued.pending_child_approval, true)
+  assert.equal(queued.operation.permission_authorization, 'pending-human-at-target')
+  assert.equal(target.inbox.length, 1)
+  await assert.rejects(() => api.setPermission({
+    target_id: target.id,
+    permission_preset: 'read-only',
+    reason: 'must not race the pending elevation',
+    idempotency_key: 'permission-child-race-001',
+  }, { agent: source, signal: new AbortController().signal }), /未决权限操作/u)
+  const internal = target.inbox[0]
+  target.session.append('turn/start', { turn: 1 })
+  const decision = await api.handlePermissionPreStep({
+    agent: target,
+    messages: [internal],
+    turn: 1,
+    step: 1,
+    signal: new AbortController().signal,
+  }, async () => ({ kind: 'enter', messages: [internal] }))
+  assert.equal(approvalAgent, target)
+  assert.match(approvalReasonText, /持久权限/u)
+  assert.match(approvalReasonText, /child needs autonomous deployment access/u)
+  assert.deepEqual(decision, { kind: 'enter', messages: [] })
+  assert.equal(ctx.permissionPresets.current(target.session.events), 'danger-full-access')
+  const settled = store.get(queued.operation.operation_id)
+  assert.equal(settled.status, 'completed')
+  assert.equal(settled.permissionAuthorization, 'approved-once-by-human-at-target')
+})
+
+test('workspace-write child rejection and stale target state perform zero permission change', async (t) => {
+  const { source, agents, api, ctx, store } = await fixture(t)
+  const rejectedTarget = makeAgent('permission-rejected-target', 'D:\\work')
+  const staleTarget = makeAgent('permission-stale-target', 'D:\\work')
+  agents.push(rejectedTarget, staleTarget)
+  let approvals = 0
+  ctx.approval.request = async () => {
+    approvals += 1
+    return 'rejected'
+  }
+  const rejected = await api.setPermission({
+    target_id: rejectedTarget.id,
+    permission_preset: 'danger-full-access',
+    reason: 'rejection path',
+    idempotency_key: 'permission-rejected-001',
+  }, { agent: source, signal: new AbortController().signal })
+  rejectedTarget.session.append('turn/start', { turn: 1 })
+  await api.handlePermissionPreStep({
+    agent: rejectedTarget,
+    messages: [rejectedTarget.inbox[0]],
+    turn: 1,
+    step: 1,
+    signal: new AbortController().signal,
+  }, async () => ({ kind: 'enter', messages: [rejectedTarget.inbox[0]] }))
+  assert.equal(ctx.permissionPresets.current(rejectedTarget.session.events), 'workspace-write')
+  assert.equal(store.get(rejected.operation.operation_id).status, 'failed')
+
+  const stale = await api.setPermission({
+    target_id: staleTarget.id,
+    permission_preset: 'danger-full-access',
+    reason: 'stale path',
+    idempotency_key: 'permission-stale-001',
+  }, { agent: source, signal: new AbortController().signal })
+  staleTarget.session.append('permission/preset', { preset: 'read-only' })
+  staleTarget.session.append('turn/start', { turn: 1 })
+  await api.handlePermissionPreStep({
+    agent: staleTarget,
+    messages: [staleTarget.inbox[0]],
+    turn: 1,
+    step: 1,
+    signal: new AbortController().signal,
+  }, async () => ({ kind: 'enter', messages: [staleTarget.inbox[0]] }))
+  assert.equal(ctx.permissionPresets.current(staleTarget.session.events), 'read-only')
+  assert.equal(store.get(stale.operation.operation_id).status, 'failed')
+  assert.equal(approvals, 1)
+})
+
+test('session creation can request child-approved initial Full access', async (t) => {
+  const { source, agents, api, ctx, store } = await fixture(t)
+  ctx.approval.request = async () => 'allowed-once'
+  const created = await api.openSession({
+    mode: 'create',
+    permission_preset: 'danger-full-access',
+    idempotency_key: 'create-permission-full-001',
+  }, { agent: source, signal: new AbortController().signal })
+  assert.equal(created.ok, true)
+  assert.equal(created.permission_pending, true)
+  assert.equal(created.operation.child_ids.length, 1)
+  const child = agents.find((agent) => agent.id === created.session_id)
+  assert.equal(ctx.permissionPresets.current(child.session.events), 'workspace-write')
+  child.session.append('turn/start', { turn: 1 })
+  await api.handlePermissionPreStep({
+    agent: child,
+    messages: [child.inbox[0]],
+    turn: 1,
+    step: 1,
+    signal: new AbortController().signal,
+  }, async () => ({ kind: 'enter', messages: [child.inbox[0]] }))
+  assert.equal(ctx.permissionPresets.current(child.session.events), 'danger-full-access')
+  assert.equal(store.get(created.operation.child_ids[0]).status, 'completed')
+})
+
+test('full-access controller changes a cold child permission and returns it to cold', async (t) => {
+  const { source, target, agents, api, ctx } = await fixture(t)
+  source.session.append('permission/preset', { preset: 'danger-full-access' })
+  agents.splice(agents.indexOf(target), 1)
+  let persistedEvents = []
+  ctx.sessionPersistence.inspect = async (id) => {
+    assert.equal(id, target.id)
+    return { meta: { id, cwd: 'D:\\work' }, events: [...persistedEvents] }
+  }
+  ctx.sessions.flush = async (session) => {
+    if (session.id === target.id) persistedEvents = [...session.events]
+  }
+  const changed = await api.setPermission({
+    target_id: target.id,
+    permission_preset: 'read-only',
+    reason: 'cold maintenance lockdown',
+    idempotency_key: 'permission-cold-001',
+  }, { agent: source, signal: new AbortController().signal })
+  assert.equal(changed.ok, true)
+  assert.equal(agents.some((agent) => agent.id === target.id), false)
+  const viewed = await api.getPermission({ target_id: target.id }, {
+    agent: source,
+    signal: new AbortController().signal,
+  })
+  assert.equal(viewed.status, 'cold')
+  assert.equal(viewed.permission_preset, 'read-only')
+})
+
+test('restart never replays an unconfirmed child permission approval', async (t) => {
+  const { source, target, store, ctx } = await fixture(t)
+  target.session.append('turn/start', { turn: 1 })
+  target.session.append('approval/asked', {
+    id: 'permission-restart-approval',
+    toolName: 'session_permission_set',
+    reason: 'pending permission change',
+  })
+  const now = new Date().toISOString()
+  const operation = await store.add({
+    id: 'permission-restart-operation',
+    kind: 'permission',
+    action: 'set',
+    parentId: null,
+    childIds: [],
+    sourceId: source.id,
+    sourceCwd: source.session.header.cwd,
+    targetId: target.id,
+    targetCwd: target.session.header.cwd,
+    idempotencyKey: 'permission-restart-001',
+    contentHash: 'permission-restart-hash',
+    messageId: 'permission-restart-message',
+    status: 'awaiting-approval',
+    turn: 1,
+    attention: { kind: 'approval' },
+    previousPermissionPreset: 'workspace-write',
+    requestedPermissionPreset: 'danger-full-access',
+    createdAt: now,
+    updatedAt: now,
+  })
+  await reconcilePermissionOperation(ctx, store, operation)
+  const recovered = store.get(operation.id)
+  assert.equal(recovered.status, 'failed')
+  assert.match(recovered.reason, /permission-restart-not-replayed/u)
+  assert.equal(ctx.permissionPresets.current(target.session.events), 'workspace-write')
+})
+
+test('permission persistence uncertainty is reconciled without replaying the change', async (t) => {
+  const { source, target, api, ctx, store } = await fixture(t)
+  source.session.append('permission/preset', { preset: 'danger-full-access' })
+  ctx.sessions.flush = async () => { throw new Error('simulated flush uncertainty') }
+  const args = {
+    target_id: target.id,
+    permission_preset: 'danger-full-access',
+    reason: 'exercise persistence uncertainty',
+    idempotency_key: 'permission-uncertain-001',
+  }
+  const uncertain = await api.setPermission(args, {
+    agent: source,
+    signal: new AbortController().signal,
+  })
+  assert.equal(uncertain.ok, false)
+  assert.equal(uncertain.operation.status, 'delivery-unknown')
+  assert.equal(ctx.permissionPresets.current(target.session.events), 'danger-full-access')
+  const duplicate = await api.setPermission(args, {
+    agent: source,
+    signal: new AbortController().signal,
+  })
+  assert.equal(duplicate.duplicate, true)
+  assert.equal(duplicate.operation.status, 'delivery-unknown')
+  await reconcilePermissionOperation(ctx, store, store.get(uncertain.operation.operation_id))
+  assert.equal(store.get(uncertain.operation.operation_id).status, 'completed')
 })
 
 test('full-access controller decides a delegated target approval exactly once', async (t) => {
@@ -510,6 +807,8 @@ test('controller tools register only in the supplied scoped context', async (t) 
     'session_manage',
     'session_open',
     'session_operations',
+    'session_permission_get',
+    'session_permission_set',
     'session_project_open',
     'session_schedule_create',
     'session_schedule_delete',
@@ -797,19 +1096,24 @@ test('project open creates a directory, registers its workspace, and attaches a 
   const result = await api.openProject({
     path: projectPath,
     title: 'New Project',
+    permission_preset: 'read-only',
     idempotency_key: 'project-open-001',
   }, { agent: source, signal: new AbortController().signal })
-  assert.equal(result.ok, true)
+  assert.equal(result.ok, true, JSON.stringify(result))
   assert.equal(result.directory_created, true)
   assert.equal((await stat(projectPath)).isDirectory(), true)
   assert.equal(ctx.workspaceRegistry.list().length, 1)
   assert.equal(ctx.workspaceRegistry.list()[0].title, 'New Project')
   assert.deepEqual(ctx.workspaceRegistry.list()[0].sessionIds, [result.session_id])
-  assert.equal(agents.find((agent) => agent.id === result.session_id).session.header.cwd, projectPath)
+  const projectAgent = agents.find((agent) => agent.id === result.session_id)
+  assert.equal(projectAgent.session.header.cwd, projectPath)
+  assert.equal(ctx.permissionPresets.current(projectAgent.session.events), 'read-only')
+  assert.equal(result.permission_operation.requested_permission_preset, 'read-only')
 
   const duplicate = await api.openProject({
     path: projectPath,
     title: 'New Project',
+    permission_preset: 'read-only',
     idempotency_key: 'project-open-001',
   }, { agent: source, signal: new AbortController().signal })
   assert.equal(duplicate.duplicate, true)
@@ -885,6 +1189,8 @@ test('host apply mounts tools only for configured controller and asks with bound
   const listeners = new Map()
   const cleanups = []
   let permissionPreset = 'workspace-write'
+  const permissions = makePermissionRuntime()
+  permissions.permissionPresets.current = () => permissionPreset
   const ctx = {
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     agents: {
@@ -895,7 +1201,7 @@ test('host apply mounts tools only for configured controller and asks with bound
     sessions: { async flush() {} },
     sessionPersistence: { async inspect() { return { events: [] } } },
     systemPrompt: { section() { return () => {} } },
-    permissionPresets: { current() { return permissionPreset } },
+    ...permissions,
     tools: { get: (name, agent) => agent.tools.get(name) },
     on(event, listener) {
       const rows = listeners.get(event) ?? []
@@ -943,6 +1249,30 @@ test('host apply mounts tools only for configured controller and asks with bound
   assert.match(decision.reason, /VISIBLE-CONTENT/u)
   assert.match(decision.reason, /approval-test-001/u)
 
+  const childElevation = await preExecute({
+    name: 'session_permission_set',
+    agent: source,
+    arguments: {
+      target_id: target.id,
+      permission_preset: 'danger-full-access',
+      reason: 'child UI owns this elevation',
+      idempotency_key: 'permission-route-child-001',
+    },
+  }, () => ({ kind: 'allow' }))
+  assert.equal(childElevation.kind, 'allow')
+  const sourceApprovedLowering = await preExecute({
+    name: 'session_permission_set',
+    agent: source,
+    arguments: {
+      target_id: target.id,
+      permission_preset: 'read-only',
+      reason: 'reduce child authority',
+      idempotency_key: 'permission-route-lower-001',
+    },
+  }, () => ({ kind: 'allow' }))
+  assert.equal(sourceApprovedLowering.kind, 'ask')
+  assert.match(sourceApprovedLowering.reason, /read-only/u)
+
   permissionPreset = 'danger-full-access'
   const autonomousExec = {
     name: 'session_send',
@@ -957,6 +1287,17 @@ test('host apply mounts tools only for configured controller and asks with bound
   assert.equal(autonomous.kind, 'allow')
   await source.tools.get('session_send').execute(autonomousExec.arguments, autonomousExec)
   assert.match(target.inbox.at(-1).content[0].text, /delegated-by-danger-full-access-controller/u)
+  const autonomousPermission = await preExecute({
+    name: 'session_permission_set',
+    agent: source,
+    arguments: {
+      target_id: target.id,
+      permission_preset: 'read-only',
+      reason: 'full controller can lower autonomously',
+      idempotency_key: 'permission-route-full-001',
+    },
+  }, () => ({ kind: 'allow' }))
+  assert.equal(autonomousPermission.kind, 'allow')
 
   for (const cleanup of cleanups.toReversed()) await cleanup?.()
   assert.equal(source.tools.size, 0)
