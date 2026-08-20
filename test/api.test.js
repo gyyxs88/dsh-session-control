@@ -1188,6 +1188,7 @@ test('host apply mounts tools only for configured controller and asks with bound
   const agents = [source, target]
   const listeners = new Map()
   const cleanups = []
+  let registeredSkill
   let permissionPreset = 'workspace-write'
   const permissions = makePermissionRuntime()
   permissions.permissionPresets.current = () => permissionPreset
@@ -1200,6 +1201,12 @@ test('host apply mounts tools only for configured controller and asks with bound
     },
     sessions: { async flush() {} },
     sessionPersistence: { async inspect() { return { events: [] } } },
+    skills: {
+      register(skill) {
+        registeredSkill = skill
+        return () => {}
+      },
+    },
     systemPrompt: { section() { return () => {} } },
     ...permissions,
     tools: { get: (name, agent) => agent.tools.get(name) },
@@ -1232,6 +1239,8 @@ test('host apply mounts tools only for configured controller and asks with bound
     maxOperations: 50,
     approvalDelegationTimeoutMs: 60000,
   })
+  assert.equal(registeredSkill.name, 'dsh-session-control')
+  assert.match(registeredSkill.content, /session_project_open/u)
   assert.equal(source.tools.has('session_send'), true)
   assert.equal(target.tools.has('session_send'), false)
 
