@@ -41,6 +41,19 @@
 
 `session_status(include_cold=true)` 可以同时列出当前授权范围内的持久 cold 会话。`session_events` 支持 `before_seq` / `after_seq` 分页并可直接读取 cold 历史；正文与工具参数/结果在 Workspace Write 下需人工审批，在 `danger-full-access` 下由控制器自主读取。`session_open` 可覆盖 provider、model、reasoning effort 和初始权限，模型覆盖值会先经 DSH LLM Core 精确校验。
 
+## 内置 Skill
+
+插件会向 DSH 的原生 Skill Registry 自动注册 `dsh-session-control`，无需用户复制文件或配置额外 skill 路径。它把自然语言请求编排为发现、项目启动、权限选择、派发、等待、定时、审批、恢复和收尾流程，同时继续以插件的实时鉴权与 operation 状态为最终事实源。
+
+例如，控制会话可以直接接受：
+
+- “在 `D:\Project\new-app` 创建项目并开始开发。”
+- “让这个子会话长期自主运行，完成后恢复工作区写入。”
+- “每 30 分钟检查一次，遇到阻塞就继续处理。”
+- “查看所有工作区里的任务进度。”
+
+项目自己的 `.dsh/skills/dsh-session-control/SKILL.md` 可以按 DSH 原生优先级覆盖这个内置版本，方便为单个项目增加更具体的操作约定。内置源文件位于 `skills/dsh-session-control/SKILL.md`，会随 npm/GitHub 安装包一起发布。
+
 ## 子会话权限管理
 
 - `session_permission_get` 只读折叠目标的 `permission/preset`、`sandbox/mode` 和 `approval/policy`，读取 cold 会话时不会恢复它。
