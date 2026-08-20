@@ -8,6 +8,8 @@ import {
   currentTurnIsRelay,
   relayEnvelope,
   sameWorkspace,
+  sessionAttention,
+  summarizeEvent,
 } from '../lib/security.js'
 
 test('workspace comparison is canonical and rejects missing paths', () => {
@@ -28,6 +30,13 @@ test('relay envelope cannot be closed by caller content', () => {
   assert.equal(envelope.match(/<\/dsh-session-relay>/gu)?.length, 1)
   assert.match(envelope, /\\u003c\/dsh-session-relay>/u)
   assert.match(envelope, /approved-once-by-human-at-source/u)
+
+  const autonomous = relayEnvelope({
+    ...operation,
+    deliveryAuthorization: 'delegated-by-danger-full-access-controller',
+  }, 'autonomous')
+  assert.match(autonomous, /delegated-by-danger-full-access-controller/u)
+  assert.doesNotMatch(autonomous, /approved-once-by-human-at-source/u)
 })
 
 test('approval reason binds target, preview, hash and idempotency key', () => {
@@ -41,6 +50,40 @@ test('approval reason binds target, preview, hash and idempotency key', () => {
   assert.match(reason, /执行一个可核对的测试/u)
   assert.match(reason, new RegExp(contentHash(content), 'u'))
   assert.match(reason, /acceptance-001/u)
+})
+
+test('schedule and project approvals bind future side effects', () => {
+  const schedule = approvalReason('session_schedule_create', {
+    target_id: 'session-target',
+    prompt: '在未来执行检查',
+    after_seconds: 60,
+    idempotency_key: 'schedule-approval-001',
+  })
+  assert.match(schedule, /session-target/u)
+  assert.match(schedule, /after=60s/u)
+  assert.match(schedule, new RegExp(contentHash('在未来执行检查'), 'u'))
+  assert.match(schedule, /schedule-approval-001/u)
+
+  const project = approvalReason('session_project_open', {
+    path: 'D:\\Project\\NewApp',
+    permission_preset: 'read-only',
+    idempotency_key: 'project-approval-001',
+  })
+  assert.match(project, /D:\\Project\\NewApp/u)
+  assert.match(project, /递归创建/u)
+  assert.match(project, /read-only/u)
+  assert.match(project, /project-approval-001/u)
+
+  const permission = approvalReason('session_permission_set', {
+    target_id: 'session-target',
+    permission_preset: 'danger-full-access',
+    reason: '长期自主部署',
+    idempotency_key: 'permission-approval-001',
+  })
+  assert.match(permission, /session-target/u)
+  assert.match(permission, /danger-full-access/u)
+  assert.match(permission, /长期自主部署/u)
+  assert.match(permission, /permission-approval-001/u)
 })
 
 test('open relay turn is detected from durable message provenance', () => {
@@ -62,4 +105,55 @@ test('open relay turn is detected from durable message provenance', () => {
   assert.equal(currentTurnIsRelay(agent), true)
   agent.session.events.push({ type: 'turn/end', data: { turn: 2 } })
   assert.equal(currentTurnIsRelay(agent), false)
+})
+
+test('session attention distinguishes approvals and user questions', () => {
+  const approval = sessionAttention([
+    { type: 'approval/asked', data: { id: 'a-1', toolName: 'pwsh' } },
+  ])
+  assert.equal(approval.kind, 'approval')
+  assert.equal(approval.needs_attention, true)
+  const cleared = sessionAttention([
+    { type: 'approval/asked', data: { id: 'a-1', toolName: 'pwsh' } },
+    { type: 'approval/decided', data: { id: 'a-1', outcome: 'allowed-once' } },
+  ])
+  assert.equal(cleared.needs_attention, false)
+  const question = sessionAttention([
+    { type: 'tool/call', data: { callId: 'q-1', name: 'ask_user_question', turn: 1 } },
+  ])
+  assert.equal(question.kind, 'user-input')
+})
+
+test('tool result content is exposed only when approved content is requested', () => {
+  const event = {
+    seq: 3,
+    type: 'tool/result',
+    data: {
+      turn: 1,
+      step: 2,
+      callId: 'call-1',
+      message: { content: [{ type: 'text', text: 'SECRET-RESULT' }] },
+    },
+  }
+  assert.equal(summarizeEvent(event, false).text, undefined)
+  assert.equal(summarizeEvent(event, true).text, 'SECRET-RESULT')
+})
+
+test('schedule event prompt is redacted unless content access was approved', () => {
+  const event = {
+    seq: 9,
+    type: 'schedule/change',
+    data: {
+      version: 1,
+      operation: 'create',
+      schedule: {
+        id: 'schedule-1',
+        kind: 'after',
+        prompt: 'PRIVATE-REMINDER',
+        scheduledAt: '2026-08-18T12:00:00.000Z',
+      },
+    },
+  }
+  assert.equal(summarizeEvent(event, false).prompt, undefined)
+  assert.equal(summarizeEvent(event, true).prompt, 'PRIVATE-REMINDER')
 })
