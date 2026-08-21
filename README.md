@@ -6,6 +6,8 @@
 
 本插件继续保持单个 DSH Host 内的会话、工作区、权限、审批和定时语义。SSH 主机接入、远端 DSH 自动部署、本机 Model Gateway、插件选择性同步，以及 Codex、Claude Code、Grok Build 的按需远端运行时设计，见 [DSH 远程项目、模型网关与 Agent 运行时架构](docs/remote-project-architecture.md)。跨主机能力将进入独立公开仓库，不把 SSH、安装器和模型网关堆入本插件。阶段 A 的正式 Remote Project service 只通过本插件现有官方 API 暴露 socket bridge，不复制 Session JSONL/SQLite。
 
+本包的 `package.json` 和 `remote-manifest` 导出包含正式、可机读的 `dsh.remote` manifest：声明固定 plugin/version、`remote` placement、Remote Project protocol/API、DSH 兼容范围、`session-control.port`/`schedule.port`/`remote-project.open` capabilities，以及随插件版本绑定的 bundled Skill SHA-256。socket bridge 的 `remote-project.ping` 也返回同一 manifest，Remote Host 可据此按 Desired State allowlist 部署；manifest 不扩展本插件的单 Host 存储边界。
+
 ## 安全模型
 
 - **默认无控制者**：`controllerSessionIds` 为空时，不向任何 Agent 注册工具。
@@ -48,6 +50,8 @@
 ## 内置 Skill
 
 插件会向 DSH 的原生 Skill Registry 自动注册 `dsh-session-control`，无需用户复制文件或配置额外 skill 路径。它把自然语言请求编排为发现、项目启动、权限选择、派发、等待、定时、审批、恢复和收尾流程，同时继续以插件的实时鉴权与 operation 状态为最终事实源。
+
+该 Skill 是插件自带内容，版本和摘要随 `dsh.remote.bundledSkills` manifest 固定；项目独立 Skill 不写入本插件的 Session/operation 状态，也不由本插件自行下载或执行安装脚本。
 
 例如，控制会话可以直接接受：
 
