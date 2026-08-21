@@ -4,7 +4,7 @@
 
 ## 远程项目设计
 
-本插件继续保持单个 DSH Host 内的会话、工作区、权限、审批和定时语义。SSH 主机接入、远端 DSH 自动部署、本机 Model Gateway、插件选择性同步，以及 Codex、Claude Code、Grok Build 的按需远端运行时设计，见 [DSH 远程项目、模型网关与 Agent 运行时架构](docs/remote-project-architecture.md)。跨主机能力将进入独立公开仓库，不把 SSH、安装器和模型网关堆入本插件。
+本插件继续保持单个 DSH Host 内的会话、工作区、权限、审批和定时语义。SSH 主机接入、远端 DSH 自动部署、本机 Model Gateway、插件选择性同步，以及 Codex、Claude Code、Grok Build 的按需远端运行时设计，见 [DSH 远程项目、模型网关与 Agent 运行时架构](docs/remote-project-architecture.md)。跨主机能力将进入独立公开仓库，不把 SSH、安装器和模型网关堆入本插件。阶段 A 的正式 Remote Project service 只通过本插件现有官方 API 暴露 socket bridge，不复制 Session JSONL/SQLite。
 
 ## 安全模型
 
@@ -142,16 +142,23 @@ Bundle 自带配置默认关闭。部署层必须覆盖：
         rateLimitPerMinute: 5
         maxOperations: 500
         approvalDelegationTimeoutMs: 900000
+        remoteProjectSocket: '/run/user/1000/dsh-session-control.sock'
+        remoteProjectHostId: 'remote-host-01'
 ```
+
+配置 `remoteProjectSocket` 后，插件启动一个权限为 `0600` 的 Unix socket bridge；它只接受 `remote-project.ping` 与 `remote-project.open`，绑定来源 live session，并串行调用官方 `openProject` / `createSchedule` API。socket 路径或 Host ID 缺失、占用路径不是 socket、或官方服务不可用时，bridge 启动失败；不提供静默 fake fallback。
 
 当前默认 `sameWorkspaceOnly=false`，因此控制器可管理同一 DSH Host 内不同 Workspace 的普通会话；跨主机和子代理仍不在这条链路中。对 cold 普通会话开放列举、历史、定时管理和经审批的 Core resume；投递、中断与一般运行态管理仍要求目标为 live。子代理继续使用 DSH 原生 `send_message` / `interrupt_agent`。
 
 ## 验证
 
 ```powershell
+# 本仓库 engines 要求 Node.js >=24
 npm test
 npm run check
 npm pack --dry-run
 ```
+
+Windows 上若系统 Node 低于 24，测试 runner 会明确拒绝并提示版本；Linux 目标上的 Unix socket bridge 集成测试在 Linux 环境执行，Windows 本地仅执行正式 port 的跨平台契约测试。
 
 测试覆盖：作用域可见性、跨工作区开关、中继轮阻断、Full Access 自主授权、Workspace Write 子会话本地审批、权限升降/方向授权/目标审批/冷会话/创建初始权限/幂等防重放、集中审批指纹/确认、Schedule 审批路由、并发幂等、批次父子汇总、cursor 多等待、精确取消、cold 历史分页、原生定时创建/隐藏/删除、项目目录与 Workspace/Session attach、Core 创建/fork/suspend、v1→v2 迁移、A/B 状态恢复和损坏双槽 fail-closed。

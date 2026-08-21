@@ -21,6 +21,7 @@
   "main": "lib/index.js",
   "exports": {
     ".": "./lib/index.js",
+    "./remote-project-bridge": "./lib/remote-project-bridge.js",
     "./security": "./lib/security.js",
     "./state-store": "./lib/state-store.js",
     "./package.json": "./package.json"
@@ -32,13 +33,14 @@
   },
   "files": [
     "lib",
+    "scripts",
     "skills",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
   ],
   "scripts": {
-    "test": "node --test --test-isolation=none test/*.test.js",
+    "test": "node scripts/run-tests.mjs",
     "check": "node --check lib/index.js && node --check lib/security.js && node --check lib/state-store.js"
   },
   "engines": {
