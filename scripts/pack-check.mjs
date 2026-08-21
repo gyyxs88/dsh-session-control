@@ -24,7 +24,7 @@ try {
   if (install.status !== 0) throw new Error(`packed tgz install failed: ${install.stderr ?? install.error?.message ?? 'unknown error'}`)
   const packageRoot = join(consumer, 'node_modules', 'dsh-session-control')
   const manifest = JSON.parse(await readFile(join(packageRoot, 'package.json'), 'utf8'))
-  if (manifest.dsh?.remote?.pluginId !== 'dsh-session-control' || manifest.dsh.remote.placements?.[0] !== 'remote') throw new Error('packed remote manifest smoke failed')
+  if (manifest.dsh?.remote?.pluginId !== 'dsh-session-control' || manifest.dsh.remote.placements?.[0] !== 'remote' || !manifest.dsh.remote.capabilities?.includes('remote-project.schedule-create')) throw new Error('packed remote manifest smoke failed')
   const entry = pathToFileURL(join(packageRoot, 'lib', 'remote-manifest.js')).href
   const imported = spawnSync(process.execPath, ['-e', `const m=await import(${JSON.stringify(entry)}); if(m.getRemoteProjectManifest().pluginId!=='dsh-session-control') process.exit(2)`], { encoding: 'utf8', stdio: 'pipe' })
   if (imported.status !== 0) throw new Error(`packed manifest import smoke failed: ${imported.stderr}`)
