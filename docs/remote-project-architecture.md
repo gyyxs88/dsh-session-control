@@ -194,6 +194,10 @@ DSH 只保存认证状态和脱敏错误，不读取、回传或同步第三方�
 - 日常控制通过 SSH 启动的 stdio bridge 与远端守护进程通信。
 - 守护进程只监听 Unix Domain Socket 或远端 loopback，不开放公网端口。
 - 每次连接协商协议版本、Host ID、DSH 版本、插件能力、运行时能力和单调状态 revision。
+- 正式 `dsh-session-control` Unix bridge 暴露 `remote-project.ping`、`remote-project.open`、`remote-project.runtime-auth-begin`、`remote-project.runtime-auth-confirm` 和 `remote-project.execution-policy-verify`；来源 `sourceHostId/sourceSessionId` 只能命中 Host 配置的 capability allowlist，并映射到远端实际执行官方 API 的 `controllerSessionId`，不能拿跨 Host 来源 ID 查询远端 Agent。
+- runtime-auth 的 begin/confirm 只绑定来源控制端、目标 Host 和 exact runtime 的 server nonce，可在新项目 Session 创建前完成；`project.open` 成功后才用真实返回的 target Session 做执行策略快照和权限核验。这样不会要求预造同 ID target，也不会把来源身份误当 target Session。
+- execution-policy verifier 每次 channel launch 都实时读取目标 Session 当前 permission/workspaceRoot/状态，并返回短时效的 `authority=dsh-session-control` 结果；不保留未消费的 capability map，不接受插件或模型请求自报 verified/provenance。
+- Remote Host 的 Runtime Manager 是独立 `0600` Unix service，使用 Host-scoped owner-only capability token 文件认证；消息中的 `targetHostId/targetSessionId` 与 Connector 来源身份分层，resolve 仅接受已完成 project receipt 绑定的真实 target Session，并从 daemon 内 InstalledRuntimeManager 消费首次认证 lease。
 
 ### 7.2 单写者原则
 

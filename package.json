@@ -24,6 +24,7 @@
     "./remote-project-bridge": "./lib/remote-project-bridge.js",
     "./remote-manifest": "./lib/remote-manifest.js",
     "./security": "./lib/security.js",
+    "./execution-policy-service": "./lib/execution-policy-service.js",
     "./state-store": "./lib/state-store.js",
     "./package.json": "./package.json"
   },
@@ -39,7 +40,7 @@
       "protocolVersion": "1.0",
       "apiVersion": "1.0",
       "dshCompatibility": {"min": "0.1.0-rc.6", "max": "0.1.0-rc.6"},
-      "capabilities": ["session-control.port", "schedule.port", "remote-project.open"],
+      "capabilities": ["session-control.port", "schedule.port", "remote-project.open", "remote-project.runtime-auth-begin", "remote-project.runtime-auth-confirm", "remote-project.execution-policy-verify"],
       "bundledSkills": [{"id": "dsh-session-control", "version": "0.6.0", "sha256": "c09fc69820b59363e1fd51440c6d84895cac8768d4911eb9fd8ff926272fbb30"}]
     }
   },
@@ -53,7 +54,7 @@
   ],
   "scripts": {
     "test": "node scripts/run-tests.mjs",
-    "check": "node --check lib/index.js && node --check lib/security.js && node --check lib/state-store.js && node --check lib/remote-manifest.js",
+    "check": "node --check lib/index.js && node --check lib/security.js && node --check lib/state-store.js && node --check lib/remote-manifest.js && node --check lib/remote-project-bridge.js && node --check lib/execution-policy-service.js",
     "pack:check": "node scripts/pack-check.mjs"
   },
   "engines": {

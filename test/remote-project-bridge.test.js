@@ -39,6 +39,7 @@ test('formal remote project port delegates to the official API', async () => {
   let captured
   const port = createRemoteProjectPort({
     hostId: 'remote-host',
+    sourceAllowlist: [{ sourceHostId: 'local-host', sourceSessionId: 'controller', controllerSessionId: 'controller' }],
     api: { async openProject(args, exec) { captured = { args, exec }; return { ok: true, workspace_id: 'w', session_id: 's', workspace: { path: args.path } } } },
     ctx: { agents: { get(id) { return id === 'controller' ? sourceAgent : undefined } } },
   })
@@ -64,7 +65,7 @@ test('remote project bridge delegates to official API and preserves source ident
     },
   }
   const ctx = { agents: { get(id) { return id === 'controller' ? sourceAgent : undefined } } }
-  const bridge = await startRemoteProjectBridge({ api, ctx, hostId: 'remote-host', socketPath })
+  const bridge = await startRemoteProjectBridge({ api, ctx, hostId: 'remote-host', sourceAllowlist: [{ sourceHostId: 'local-host', sourceSessionId: 'controller', controllerSessionId: 'controller' }], socketPath })
   try {
     const [pong, result] = await request(socketPath, [
       { type: 'remote-project.ping', hostId: 'remote-host' },
@@ -93,4 +94,39 @@ test('remote project bridge delegates to official API and preserves source ident
     await bridge.close()
     await rm(root, { recursive: true, force: true })
   }
+})
+
+test('formal runtime auth binds source capability and exact nonce before any target Session exists', async () => {
+  const sourceAgent = { id: 'controller', session: { header: { cwd: '/srv/controller' } } }
+  const port = createRemoteProjectPort({
+    hostId: 'remote-host',
+    sourceAllowlist: [{ sourceHostId: 'local-host', sourceSessionId: 'controller', controllerSessionId: 'controller' }],
+    api: { async openProject() { throw new Error('not used') } },
+    ctx: { agents: { get(id) { return id === 'controller' ? sourceAgent : undefined } } },
+  })
+  const request = { runtimeId: 'codex', version: '1.0.0', sha256: 'a'.repeat(64), challengeId: 'challenge-000000000000', nonce: 'nonce_abcdefghijklmnopqrstuvwxyz012345', expiresAt: new Date(Date.now() + 60_000).toISOString() }
+  const begun = await port.beginRuntimeAuth({ hostId: 'remote-host', sourceHostId: 'local-host', sourceSessionId: 'controller', request })
+  assert.equal(begun.result.accepted, true)
+  await assert.rejects(port.confirmRuntimeAuth({ hostId: 'remote-host', sourceHostId: 'forged-host', sourceSessionId: 'controller', request }), /nonce is unknown|authorized/)
+  const confirmed = await port.confirmRuntimeAuth({ hostId: 'remote-host', sourceHostId: 'local-host', sourceSessionId: 'controller', request })
+  assert.deepEqual(confirmed.result, { approved: true, targetSessionId: null })
+})
+
+test('formal execution policy is derived from the real target Session after project creation', async () => {
+  const sourceAgent = { id: 'controller', session: { header: { cwd: '/srv/controller' } } }
+  const targetAgent = { id: 'target-session', status: 'idle', session: { header: { cwd: '/srv/project' }, events: [] } }
+  const port = createRemoteProjectPort({
+    hostId: 'remote-host',
+    sourceAllowlist: [{ sourceHostId: 'local-host', sourceSessionId: 'controller', controllerSessionId: 'controller' }],
+    api: { async openProject() { throw new Error('not used') } },
+    ctx: {
+      agents: { get(id) { return id === 'controller' ? sourceAgent : id === 'target-session' ? targetAgent : undefined } },
+      permissionPresets: { current() { return 'workspace-write' } },
+    },
+  })
+  const policy = await port.verifyTargetSessionPolicy({ hostId: 'remote-host', sourceHostId: 'local-host', sourceSessionId: 'controller', targetSessionId: 'target-session', request: {} })
+  assert.equal(policy.result.verified, true)
+  assert.equal(policy.result.targetSessionId, 'target-session')
+  assert.equal(policy.result.workspaceRoot, '/srv/project')
+  await assert.rejects(port.verifyTargetSessionPolicy({ hostId: 'remote-host', sourceHostId: 'forged-host', sourceSessionId: 'controller', targetSessionId: 'target-session', request: {} }), /authorized/)
 })
