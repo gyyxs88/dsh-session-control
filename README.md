@@ -2,6 +2,10 @@
 
 面向 DeepSeek Harness `0.1.0-rc.6` 的受权跨会话控制插件。它把早期动态 `sctrl-1` 原型改造成持久、可审计、可恢复的 Host 插件。
 
+## 远程项目设计
+
+本插件继续保持单个 DSH Host 内的会话、工作区、权限、审批和定时语义。SSH 主机接入、远端 DSH 自动部署、本机 Model Gateway、插件选择性同步，以及 Codex、Claude Code、Grok Build 的按需远端运行时设计，见 [DSH 远程项目、模型网关与 Agent 运行时架构](docs/remote-project-architecture.md)。跨主机能力将进入独立公开仓库，不把 SSH、安装器和模型网关堆入本插件。
+
 ## 安全模型
 
 - **默认无控制者**：`controllerSessionIds` 为空时，不向任何 Agent 注册工具。
