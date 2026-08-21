@@ -6,7 +6,7 @@
 
 本插件继续保持单个 DSH Host 内的会话、工作区、权限、审批和定时语义。SSH 主机接入、远端 DSH 自动部署、本机 Model Gateway、插件选择性同步，以及 Codex、Claude Code、Grok Build 的按需远端运行时设计，见 [DSH 远程项目、模型网关与 Agent 运行时架构](docs/remote-project-architecture.md)。跨主机能力将进入独立公开仓库，不把 SSH、安装器和模型网关堆入本插件。阶段 A 的正式 Remote Project service 只通过本插件现有官方 API 暴露 socket bridge，不复制 Session JSONL/SQLite。
 
-本包的 `package.json` 和 `remote-manifest` 导出包含正式、可机读的 `dsh.remote` manifest：声明固定 plugin/version、`remote` placement、Remote Project protocol/API、DSH 兼容范围、`session-control.port`/`schedule.port`/`remote-project.open` capabilities，以及随插件版本绑定的 bundled Skill SHA-256。socket bridge 的 `remote-project.ping` 也返回同一 manifest，Remote Host 可据此按 Desired State allowlist 部署；manifest 不扩展本插件的单 Host 存储边界。
+本包的 `package.json` 和 `remote-manifest` 导出包含正式、可机读的 `dsh.remote` manifest：声明固定 plugin/version、`remote` placement、Remote Project protocol/API、DSH 兼容范围、Session Control、Schedule、runtime-auth 和 execution-policy capabilities，以及随插件版本绑定的 bundled Skill SHA-256。socket bridge 的 `remote-project.ping` 也返回同一 manifest，Remote Host 可据此按 Desired State allowlist 部署；manifest 不扩展本插件的单 Host 存储边界。
 
 ## 安全模型
 
@@ -148,9 +148,13 @@ Bundle 自带配置默认关闭。部署层必须覆盖：
         approvalDelegationTimeoutMs: 900000
         remoteProjectSocket: '/run/user/1000/dsh-session-control.sock'
         remoteProjectHostId: 'remote-host-01'
+        remoteProjectSourceAllowlist:
+          - sourceHostId: 'local-host-01'
+            sourceSessionId: 'controller-session-01'
+            controllerSessionId: 'remote-host-controller-01'
 ```
 
-配置 `remoteProjectSocket` 后，插件启动一个权限为 `0600` 的 Unix socket bridge；它只接受 `remote-project.ping` 与 `remote-project.open`，绑定来源 live session，并串行调用官方 `openProject` / `createSchedule` API。socket 路径或 Host ID 缺失、占用路径不是 socket、或官方服务不可用时，bridge 启动失败；不提供静默 fake fallback。
+配置 `remoteProjectSocket` 后，插件启动一个权限为 `0600` 的 Unix socket bridge；它接受 `remote-project.ping`、`remote-project.open`、`remote-project.runtime-auth-begin`、`remote-project.runtime-auth-confirm` 和 `remote-project.execution-policy-verify`，串行调用官方 `openProject` / `createSchedule` API 与当前 Host 的 Session/权限状态。`remoteProjectSourceAllowlist` 必须显式列出 `sourceHostId`、`sourceSessionId` 以及远端实际执行 API 的 `controllerSessionId`；空 allowlist fail closed，来源身份不会被当成远端 Agent 查询。运行时首次认证只绑定来源控制端、Host 和精确 runtime，可在新项目 Session 创建前完成；执行策略核验必须在 Session 创建后按真实 target Session 实时查询。socket 路径或 Host ID 缺失、占用路径不是 socket、或官方服务不可用时，bridge 启动失败；不提供静默 fake fallback。
 
 当前默认 `sameWorkspaceOnly=false`，因此控制器可管理同一 DSH Host 内不同 Workspace 的普通会话；跨主机和子代理仍不在这条链路中。对 cold 普通会话开放列举、历史、定时管理和经审批的 Core resume；投递、中断与一般运行态管理仍要求目标为 live。子代理继续使用 DSH 原生 `send_message` / `interrupt_agent`。
 

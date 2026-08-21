@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import path from 'node:path'
 
 import {
   PLUGIN_ID,
@@ -13,9 +14,10 @@ import {
 } from '../lib/security.js'
 
 test('workspace comparison is canonical and rejects missing paths', () => {
-  assert.equal(sameWorkspace('D:\\Project\\Demo', 'd:\\project\\demo\\.'), true)
-  assert.equal(sameWorkspace('D:\\Project\\Demo', 'D:\\Project\\Other'), false)
-  assert.equal(sameWorkspace(undefined, 'D:\\Project\\Demo'), false)
+  const workspace = path.resolve('workspace-fixture', 'Project', 'Demo')
+  assert.equal(sameWorkspace(workspace, path.join(workspace, '.')), true)
+  assert.equal(sameWorkspace(workspace, path.join(path.dirname(workspace), 'Other')), false)
+  assert.equal(sameWorkspace(undefined, workspace), false)
 })
 
 test('relay envelope cannot be closed by caller content', () => {
@@ -65,11 +67,11 @@ test('schedule and project approvals bind future side effects', () => {
   assert.match(schedule, /schedule-approval-001/u)
 
   const project = approvalReason('session_project_open', {
-    path: 'D:\\Project\\NewApp',
+    path: path.resolve('workspace-fixture', 'NewApp'),
     permission_preset: 'read-only',
     idempotency_key: 'project-approval-001',
   })
-  assert.match(project, /D:\\Project\\NewApp/u)
+  assert.match(project, /NewApp/u)
   assert.match(project, /递归创建/u)
   assert.match(project, /read-only/u)
   assert.match(project, /project-approval-001/u)

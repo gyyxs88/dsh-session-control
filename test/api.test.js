@@ -139,9 +139,9 @@ function installFakeScheduleTools(agent) {
 async function fixture(t) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'dsh-session-control-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
-  const source = makeAgent('controller', 'D:\\work')
-  const target = makeAgent('target', 'D:\\work')
-  const otherWorkspace = makeAgent('other', 'D:\\other')
+  const source = makeAgent('controller', '/workspace/work')
+  const target = makeAgent('target', '/workspace/work')
+  const otherWorkspace = makeAgent('other', '/workspace/other')
   const agents = [source, target, otherWorkspace]
   const workspaces = []
   const permissions = makePermissionRuntime()
@@ -277,7 +277,7 @@ test('cross-workspace target and operation theft are rejected', async (t) => {
     content: 'ok',
     idempotency_key: 'owned-operation-01',
   }, exec)
-  const thief = makeAgent('second-controller', 'D:\\work')
+  const thief = makeAgent('second-controller', '/workspace/work')
   await assert.rejects(() => api.wait({
     operation_id: sent.operation.operation_id,
     timeout_ms: 10,
@@ -299,13 +299,13 @@ test('cross-workspace control is enabled when the deployment switch is false', a
 test('cross-workspace cold discovery expands persistence with Workspace registry membership', async (t) => {
   const { source, api, config, ctx, store } = await fixture(t)
   config.sameWorkspaceOnly = false
-  const workspace = await ctx.workspaceRegistry.create('D:\\cold-project', 'Cold Project')
+  const workspace = await ctx.workspaceRegistry.create('/workspace/cold-project', 'Cold Project')
   await workspace.attachSession('cold-other-workspace')
   ctx.sessionPersistence.list = async () => []
   ctx.sessionPersistence.inspect = async (id) => {
     assert.equal(id, 'cold-other-workspace')
     return {
-      meta: { id, cwd: 'D:\\cold-project' },
+      meta: { id, cwd: '/workspace/cold-project' },
       events: [{ seq: 7, type: 'turn/end', data: { turn: 1, reason: { kind: 'completed' } } }],
     }
   }
@@ -317,7 +317,7 @@ test('cross-workspace cold discovery expands persistence with Workspace registry
   await cleanup()
   const discovered = result.sessions.find((session) => session.id === 'cold-other-workspace')
   assert.equal(discovered.status, 'cold')
-  assert.equal(discovered.cwd, 'D:\\cold-project')
+  assert.equal(discovered.cwd, '/workspace/cold-project')
 })
 
 test('full-access controller persistently raises and lowers child permission without replay', async (t) => {
@@ -398,8 +398,8 @@ test('workspace-write Full access elevation is approved in the child turn and hi
 
 test('workspace-write child rejection and stale target state perform zero permission change', async (t) => {
   const { source, agents, api, ctx, store } = await fixture(t)
-  const rejectedTarget = makeAgent('permission-rejected-target', 'D:\\work')
-  const staleTarget = makeAgent('permission-stale-target', 'D:\\work')
+  const rejectedTarget = makeAgent('permission-rejected-target', '/workspace/work')
+  const staleTarget = makeAgent('permission-stale-target', '/workspace/work')
   agents.push(rejectedTarget, staleTarget)
   let approvals = 0
   ctx.approval.request = async () => {
@@ -475,7 +475,7 @@ test('full-access controller changes a cold child permission and returns it to c
   let persistedEvents = []
   ctx.sessionPersistence.inspect = async (id) => {
     assert.equal(id, target.id)
-    return { meta: { id, cwd: 'D:\\work' }, events: [...persistedEvents] }
+    return { meta: { id, cwd: '/workspace/work' }, events: [...persistedEvents] }
   }
   ctx.sessions.flush = async (session) => {
     if (session.id === target.id) persistedEvents = [...session.events]
@@ -565,8 +565,8 @@ test('full-access controller decides a delegated target approval exactly once', 
   t.after(() => rm(directory, { recursive: true, force: true }))
   const store = await new OperationStore({ stateDir: directory, maxOperations: 50 }).load()
   t.after(() => store.dispose())
-  const source = makeAgent('controller', 'D:\\work')
-  const target = makeAgent('target', 'D:\\work')
+  const source = makeAgent('controller', '/workspace/work')
+  const target = makeAgent('target', '/workspace/work')
   const ctx = {
     logger: { warn() {} },
     agents: {
@@ -658,8 +658,8 @@ test('workspace-write controller leaves target approval in the child UI', async 
   t.after(() => rm(directory, { recursive: true, force: true }))
   const store = await new OperationStore({ stateDir: directory, maxOperations: 50 }).load()
   t.after(() => store.dispose())
-  const source = makeAgent('controller', 'D:\\work')
-  const target = makeAgent('target', 'D:\\work')
+  const source = makeAgent('controller', '/workspace/work')
+  const target = makeAgent('target', '/workspace/work')
   let preset = 'danger-full-access'
   const ctx = {
     logger: { warn() {} },
@@ -724,8 +724,8 @@ test('scheduled autonomous turn routes approval back to its full-access controll
   t.after(() => rm(directory, { recursive: true, force: true }))
   const store = await new OperationStore({ stateDir: directory, maxOperations: 50 }).load()
   t.after(() => store.dispose())
-  const source = makeAgent('controller', 'D:\\work')
-  const target = makeAgent('target', 'D:\\scheduled')
+  const source = makeAgent('controller', '/workspace/work')
+  const target = makeAgent('target', '/workspace/scheduled')
   let preset = 'danger-full-access'
   const ctx = {
     logger: { warn() {} },
@@ -1149,7 +1149,7 @@ test('project open reports attach failure as partial without hiding created stat
 
 test('status and paged events can inspect same-workspace cold sessions without resuming', async (t) => {
   const { source, ctx, store, api } = await fixture(t)
-  const coldHeader = { id: 'cold-session', cwd: 'D:\\work' }
+  const coldHeader = { id: 'cold-session', cwd: '/workspace/work' }
   const coldEvents = [
     { seq: 0, type: 'turn/start', data: { turn: 1 } },
     { seq: 1, type: 'user/message', data: { id: 'cold-u-1', content: [{ type: 'text', text: 'one' }] } },
@@ -1183,8 +1183,8 @@ test('status and paged events can inspect same-workspace cold sessions without r
 test('host apply mounts tools only for configured controller and asks with bound reason', async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'dsh-session-control-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
-  const source = makeAgent('controller', 'D:\\work')
-  const target = makeAgent('target', 'D:\\work')
+  const source = makeAgent('controller', '/workspace/work')
+  const target = makeAgent('target', '/workspace/work')
   const agents = [source, target]
   const listeners = new Map()
   const cleanups = []
@@ -1221,6 +1221,9 @@ test('host apply mounts tools only for configured controller and asks with bound
       cleanups.push(cleanup)
       return cleanup
     },
+    provide(name, value) {
+      this[name] = value
+    },
   }
   source.ctx.effect = (callback) => {
     const cleanup = callback()
@@ -1239,6 +1242,11 @@ test('host apply mounts tools only for configured controller and asks with bound
     maxOperations: 50,
     approvalDelegationTimeoutMs: 60000,
   })
+  assert.equal(typeof ctx.dshSessionControlExecutionPolicyResolver, 'function')
+  assert.equal(typeof ctx.dshSessionControlExecutionPolicyVerifier?.verifyTargetSessionPolicy, 'function')
+  const resolvedPolicy = await ctx.dshSessionControlExecutionPolicyResolver({ exec: { agent: target }, request: { cwd: target.session.header.cwd } })
+  const verifiedPolicy = await ctx.dshSessionControlExecutionPolicyVerifier.verifyTargetSessionPolicy({ exec: { agent: target }, policy: resolvedPolicy })
+  assert.equal(verifiedPolicy.authority, 'dsh-session-control')
   assert.equal(registeredSkill.name, 'dsh-session-control')
   assert.match(registeredSkill.content, /session_project_open/u)
   assert.equal(source.tools.has('session_send'), true)
