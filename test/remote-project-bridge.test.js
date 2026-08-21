@@ -79,6 +79,31 @@ test('formal remote project port deletes a schedule through the official API and
   assert.equal(captured.exec.signal.aborted, false)
 })
 
+test('formal remote project port creates a schedule through the official API without reopening the project', async () => {
+  const sourceAgent = { id: 'controller', session: { header: { cwd: '/srv' } } }
+  let captured
+  const port = createRemoteProjectPort({
+    hostId: 'remote-host',
+    sourceAllowlist: [{ sourceHostId: 'local-host', sourceSessionId: 'controller', controllerSessionId: 'controller' }],
+    api: {
+      async openProject() { throw new Error('must not reopen project') },
+      async createSchedule(args, exec) { captured = { args, exec }; return { ok: true, schedule: { id: 'schedule-1' } } },
+    },
+    ctx: { agents: { get(id) { return id === 'controller' ? sourceAgent : undefined } } },
+  })
+  const response = await port.createSchedule({
+    type: 'remote-project.schedule-create', hostId: 'remote-host', sourceHostId: 'local-host', sourceSessionId: 'controller', targetSessionId: 'target-session',
+    request: { prompt: 'check', everySeconds: 600, idempotencyKey: 'schedule-create-001' },
+  })
+  assert.equal(response.type, 'remote-project.schedule-create-result')
+  assert.equal(response.result.schedule.id, 'schedule-1')
+  assert.equal(captured.args.target_id, 'target-session')
+  assert.equal(captured.args.every_seconds, 600)
+  assert.equal(captured.exec.agent, sourceAgent)
+  assert.equal(captured.exec.signal.aborted, false)
+  await assert.rejects(port.createSchedule({ type: 'remote-project.schedule-create', hostId: 'remote-host', sourceHostId: 'local-host', sourceSessionId: 'controller', targetSessionId: 'target-session', request: { prompt: 'bad', afterSeconds: 1, everySeconds: 600, idempotencyKey: 'schedule-create-002' } }), /exactly one timing mode/)
+})
+
 test('remote project bridge delegates to official API and preserves source identity', { skip: process.platform !== 'linux' }, async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), 'dsh-session-remote-'))
   const socketPath = path.join(root, 'remote-project.sock')

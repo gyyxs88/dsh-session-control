@@ -9,6 +9,7 @@ test('remote manifest is machine-readable, versioned, and advertises the support
   assert.equal(manifest.pluginId, 'dsh-session-control')
   assert.deepEqual(manifest.placements, ['remote'])
   assert.ok(manifest.capabilities.includes('session-control.port'))
+  assert.ok(manifest.capabilities.includes('remote-project.schedule-create'))
   assert.equal(manifest.bundledSkills[0].id, 'dsh-session-control')
   assert.equal(getRemoteProjectManifest().protocolVersion, '1.0')
 })
