@@ -48,6 +48,35 @@ test('formal remote project port delegates to the official API', async () => {
   assert.equal(response.result.sessionId, 's')
   assert.equal(captured.args.idempotency_key, 'project-key-001')
   assert.equal(captured.exec.agent, sourceAgent)
+  assert.equal(captured.exec.signal.aborted, false)
+})
+
+test('formal remote project port deletes a schedule through the official API and source controller', async () => {
+  const sourceAgent = { id: 'controller', session: { header: { cwd: '/srv' } } }
+  let captured
+  const port = createRemoteProjectPort({
+    hostId: 'remote-host',
+    sourceAllowlist: [{ sourceHostId: 'local-host', sourceSessionId: 'controller', controllerSessionId: 'controller' }],
+    api: {
+      async openProject() { throw new Error('not used') },
+      async deleteSchedule(args, exec) { captured = { args, exec }; return { ok: true, result: { deleted: true } } },
+    },
+    ctx: { agents: { get(id) { return id === 'controller' ? sourceAgent : undefined } } },
+  })
+  const response = await port.deleteSchedule({
+    type: 'remote-project.schedule-delete',
+    hostId: 'remote-host',
+    sourceHostId: 'local-host',
+    sourceSessionId: 'controller',
+    targetSessionId: 'target-session',
+    request: { scheduleId: 'schedule-1', idempotencyKey: 'schedule-delete-001' },
+  })
+  assert.equal(response.type, 'remote-project.schedule-delete-result')
+  assert.equal(response.result.result.deleted, true)
+  assert.equal(captured.args.target_id, 'target-session')
+  assert.equal(captured.args.schedule_id, 'schedule-1')
+  assert.equal(captured.exec.agent, sourceAgent)
+  assert.equal(captured.exec.signal.aborted, false)
 })
 
 test('remote project bridge delegates to official API and preserves source identity', { skip: process.platform !== 'linux' }, async () => {

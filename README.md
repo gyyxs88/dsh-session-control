@@ -154,7 +154,7 @@ Bundle 自带配置默认关闭。部署层必须覆盖：
             controllerSessionId: 'remote-host-controller-01'
 ```
 
-配置 `remoteProjectSocket` 后，插件启动一个权限为 `0600` 的 Unix socket bridge；它接受 `remote-project.ping`、`remote-project.open`、`remote-project.runtime-auth-begin`、`remote-project.runtime-auth-confirm` 和 `remote-project.execution-policy-verify`，串行调用官方 `openProject` / `createSchedule` API 与当前 Host 的 Session/权限状态。`remoteProjectSourceAllowlist` 必须显式列出 `sourceHostId`、`sourceSessionId` 以及远端实际执行 API 的 `controllerSessionId`；空 allowlist fail closed，来源身份不会被当成远端 Agent 查询。运行时首次认证只绑定来源控制端、Host 和精确 runtime，可在新项目 Session 创建前完成；执行策略核验必须在 Session 创建后按真实 target Session 实时查询。socket 路径或 Host ID 缺失、占用路径不是 socket、或官方服务不可用时，bridge 启动失败；不提供静默 fake fallback。
+配置 `remoteProjectSocket` 后，插件启动一个权限为 `0600` 的 Unix socket bridge；它接受 `remote-project.ping`、`remote-project.open`、`remote-project.schedule-delete`、`remote-project.runtime-auth-begin`、`remote-project.runtime-auth-confirm` 和 `remote-project.execution-policy-verify`，串行调用官方 `openProject` / `createSchedule` / `deleteSchedule` API 与当前 Host 的 Session/权限状态。远端 schedule delete 必须绑定原来源 controller、真实 target Session、精确 schedule id 和独立幂等键，不能直接编辑 Session 日志。`remoteProjectSourceAllowlist` 必须显式列出 `sourceHostId`、`sourceSessionId` 以及远端实际执行 API 的 `controllerSessionId`；空 allowlist fail closed，来源身份不会被当成远端 Agent 查询。运行时首次认证只绑定来源控制端、Host 和精确 runtime，可在新项目 Session 创建前完成；执行策略核验必须在 Session 创建后按真实 target Session 实时查询。socket 路径或 Host ID 缺失、占用路径不是 socket、或官方服务不可用时，bridge 启动失败；不提供静默 fake fallback。
 
 当前默认 `sameWorkspaceOnly=false`，因此控制器可管理同一 DSH Host 内不同 Workspace 的普通会话；跨主机和子代理仍不在这条链路中。对 cold 普通会话开放列举、历史、定时管理和经审批的 Core resume；投递、中断与一般运行态管理仍要求目标为 live。子代理继续使用 DSH 原生 `send_message` / `interrupt_agent`。
 
