@@ -8,6 +8,8 @@
 
 本包的 `package.json` 和 `remote-manifest` 导出包含正式、可机读的 `dsh.remote` manifest：声明固定 plugin/version、`remote` placement、Remote Project protocol/API、DSH 兼容范围、Session Control、Schedule、runtime-auth 和 execution-policy capabilities，以及随插件版本绑定的 bundled Skill SHA-256。socket bridge 的 `remote-project.ping` 也返回同一 manifest，Remote Host 可据此按 Desired State allowlist 部署；manifest 不扩展本插件的单 Host 存储边界。
 
+跨会话 relay 的持久 `user/message.source` 会记录版本化来源元数据：固定生产者 `dsh-session-control`、来源/目标 Session、operation、展示方 `DSH`，以及发送时的有界来源任务标题。标题只用于展示，不参与授权；来源身份和 operation 仍由 Host 已验证对象写入，界面不得从消息正文推断可信来源。这样冷会话重开、分页和页面刷新后仍能显示“由 DSH 从任务……发送”。
+
 ## 安全模型
 
 - **默认无控制者**：`controllerSessionIds` 为空且 `authorizeAllOrdinarySessions=false` 时，不向任何 Agent 注册工具。

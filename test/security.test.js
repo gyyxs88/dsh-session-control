@@ -9,7 +9,9 @@ import {
   contentHash,
   currentTurnIsRelay,
   relayEnvelope,
+  relayMessageSource,
   sameWorkspace,
+  sessionDisplayTitle,
   sessionAttention,
   summarizeEvent,
 } from '../lib/security.js'
@@ -55,6 +57,32 @@ test('relay envelope cannot be closed by caller content', () => {
   }, 'autonomous')
   assert.match(autonomous, /delegated-by-danger-full-access-controller/u)
   assert.doesNotMatch(autonomous, /approved-once-by-human-at-source/u)
+})
+
+test('relay provenance binds the trusted source task and sanitizes its display title', () => {
+  const source = {
+    id: 'source-session',
+    session: {
+      events: [
+        { type: 'session/title', data: { title: 'old title' } },
+        { type: 'session/title', data: { title: '  source\u0000 task\n title  ' } },
+      ],
+    },
+  }
+  const target = { id: 'target-session' }
+  const operation = { id: 'operation-1' }
+  assert.deepEqual(relayMessageSource(operation, source, target), {
+    kind: 'plugin',
+    plugin: PLUGIN_ID,
+    form: 'relay',
+    provenanceVersion: 1,
+    senderDisplayName: 'DSH',
+    senderSessionId: 'source-session',
+    senderSessionTitle: 'source task title',
+    targetSessionId: 'target-session',
+    operationId: 'operation-1',
+  })
+  assert.equal(sessionDisplayTitle([], 120), undefined)
 })
 
 test('approval reason binds target, preview, hash and idempotency key', () => {
