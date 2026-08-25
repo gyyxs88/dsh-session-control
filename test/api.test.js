@@ -239,6 +239,10 @@ async function fixture(t) {
 
 test('send captures pre-followup status and is idempotent', async (t) => {
   const { source, target, api } = await fixture(t)
+  source.session.events.push({
+    type: 'session/title',
+    data: { title: '来源任务' },
+  })
   const exec = { agent: source, signal: new AbortController().signal }
   const args = {
     target_id: target.id,
@@ -255,6 +259,17 @@ test('send captures pre-followup status and is idempotent', async (t) => {
     content: 'different content',
   }, exec), /幂等键/u)
   assert.equal(target.inbox[0].source.plugin, 'dsh-session-control')
+  assert.deepEqual(target.inbox[0].source, {
+    kind: 'plugin',
+    plugin: 'dsh-session-control',
+    form: 'relay',
+    provenanceVersion: 1,
+    senderDisplayName: 'DSH',
+    senderSessionId: source.id,
+    senderSessionTitle: '来源任务',
+    targetSessionId: target.id,
+    operationId: first.operation.operation_id,
+  })
   assert.match(target.inbox[0].content[0].text, /<dsh-session-relay>/u)
 
   const duplicate = await api.send(args, exec)
