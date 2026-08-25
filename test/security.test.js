@@ -4,6 +4,7 @@ import path from 'node:path'
 
 import {
   PLUGIN_ID,
+  admitControllerAgent,
   approvalReason,
   contentHash,
   currentTurnIsRelay,
@@ -18,6 +19,21 @@ test('workspace comparison is canonical and rejects missing paths', () => {
   assert.equal(sameWorkspace(workspace, path.join(workspace, '.')), true)
   assert.equal(sameWorkspace(workspace, path.join(path.dirname(workspace), 'Other')), false)
   assert.equal(sameWorkspace(undefined, workspace), false)
+})
+
+test('all-ordinary controller admission is broad for normal sessions but excludes subagents', () => {
+  const controllers = new Set(['explicit-controller'])
+  const agents = {
+    get: () => undefined,
+    isOwnedBy: () => false,
+  }
+  const ordinary = { id: 'ordinary', session: { header: { cwd: '/workspace' } } }
+  const subagent = { id: 'subagent', session: { header: { cwd: '/workspace', origin: 'subagent' } } }
+  assert.equal(admitControllerAgent(agents, ordinary, controllers, false), false)
+  assert.equal(admitControllerAgent(agents, ordinary, controllers, true), true)
+  assert.equal(controllers.has('ordinary'), true)
+  assert.equal(admitControllerAgent(agents, subagent, controllers, true), false)
+  assert.equal(controllers.has('subagent'), false)
 })
 
 test('relay envelope cannot be closed by caller content', () => {
