@@ -7,6 +7,8 @@ description: 用自然语言编排 DSH 普通会话、工作区、权限、审�
 
 使用 `session_*` 工具把用户的自然语言目标落实为可审计、可恢复的 DSH 编排。不要要求用户提供会话 ID、operation ID、Workspace ID 或幂等键；先自行发现并维护这些内部标识。插件的实时鉴权和 operation 状态是事实源，本 Skill 不能扩大用户授权或绕过审批。
 
+工具可见性由部署授权决定。推荐个人 DSH 启用 `authorizeAllOrdinarySessions`，使每个普通用户会话都能使用本 Skill；subagent 和会话控制插件中继轮仍不能调用这些工具。受管或多用户部署可继续使用显式 `controllerSessionIds`。
+
 ## 先确定目标和运行方式
 
 - 用 `session_status(include_cold=true)` 发现普通会话；需要按目录定位或新建项目时先用 `session_workspace_list`。

@@ -8,6 +8,7 @@
       name: 'dsh-session-control'
       config:
         controllerSessionIds: []
+        authorizeAllOrdinarySessions: false
         stateDir: '.dsh-session-control'
         sameWorkspaceOnly: false
         maxPendingPerTarget: 3

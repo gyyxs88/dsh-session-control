@@ -10,8 +10,8 @@
 
 ## 安全模型
 
-- **默认无控制者**：`controllerSessionIds` 为空时，不向任何 Agent 注册工具。
-- **工具按 Agent scope 注册**：只有显式列出的控制会话看得到 `session_*` 工具，目标会话不会得到这些工具。
+- **默认无控制者**：`controllerSessionIds` 为空且 `authorizeAllOrdinarySessions=false` 时，不向任何 Agent 注册工具。
+- **工具按 Agent scope 注册**：受管部署可只向显式控制会话挂载；个人 DSH 可显式启用 `authorizeAllOrdinarySessions`，让所有普通用户会话获得工具。subagent 不会因该开关获得工具，中继轮即使来自已授权普通会话也会在执行时被拒绝。
 - **执行时重复鉴权**：工具可见性只是界面边界；每次执行仍校验精确 controller id、普通会话、非 self、非 subagent；当前默认允许同一 DSH Host 内跨工作区控制，投递和运行态管理仍要求目标为 live。
 - **权限预设决定授权方式**：Workspace Write 控制器的副作用继续走 `tools/pre-execute → ask`；只有当前原生预设确认为 `danger-full-access` 的控制器可自主执行。判定读取 DSH 会话事件折叠结果，不接受消息自报。
 - **子会话审批不错误集中**：仅由 `danger-full-access` 控制器创建/恢复的受管会话，以及该控制器发起的 relay / Schedule 轮次，可把目标审批路由回来源控制器；Workspace Write 控制器不截获，人工审批卡保留在子会话 UI。
@@ -139,6 +139,7 @@ Bundle 自带配置默认关闭。部署层必须覆盖：
       config:
         controllerSessionIds:
           - session-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
+        authorizeAllOrdinarySessions: false
         stateDir: 'D:\\path\\to\\.dsh-home\\session-control'
         sameWorkspaceOnly: false
         maxPendingPerTarget: 3
@@ -157,6 +158,8 @@ Bundle 自带配置默认关闭。部署层必须覆盖：
 配置 `remoteProjectSocket` 后，插件启动一个权限为 `0600` 的 Unix socket bridge；它接受 `remote-project.ping`、`remote-project.open`、`remote-project.schedule-create`、`remote-project.schedule-delete`、`remote-project.runtime-auth-begin`、`remote-project.runtime-auth-confirm` 和 `remote-project.execution-policy-verify`，串行调用官方 `openProject` / `createSchedule` / `deleteSchedule` API 与当前 Host 的 Session/权限状态。独立 Schedule 创建和删除都必须绑定原来源 controller、真实 target Session 和独立幂等键，不能通过重新打开项目或直接编辑 Session 日志冒充。`remoteProjectSourceAllowlist` 必须显式列出 `sourceHostId`、`sourceSessionId` 以及远端实际执行 API 的 `controllerSessionId`；空 allowlist fail closed，来源身份不会被当成远端 Agent 查询。运行时首次认证只绑定来源控制端、Host 和精确 runtime，可在新项目 Session 创建前完成；执行策略核验必须在 Session 创建后按真实 target Session 实时查询。socket 路径或 Host ID 缺失、占用路径不是 socket、或官方服务不可用时，bridge 启动失败；不提供静默 fake fallback。
 
 当前默认 `sameWorkspaceOnly=false`，因此控制器可管理同一 DSH Host 内不同 Workspace 的普通会话；跨主机和子代理仍不在这条链路中。对 cold 普通会话开放列举、历史、定时管理和经审批的 Core resume；投递、中断与一般运行态管理仍要求目标为 live。子代理继续使用 DSH 原生 `send_message` / `interrupt_agent`。
+
+个人单用户 DSH 若希望“在任意普通会话中直接要求添加目录、创建项目或控制其他普通会话”，应设置 `authorizeAllOrdinarySessions: true`。该模式按当前会话原生权限预设继续执行 Workspace Write 审批或 Full Access 自主授权，不把权限授予 subagent，也不允许 relay 轮继续发起会话控制。
 
 ## 验证
 
