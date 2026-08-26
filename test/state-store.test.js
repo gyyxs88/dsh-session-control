@@ -129,6 +129,43 @@ test('batch parent rolls up attention and mixed terminal results', async (t) => 
   await store.dispose()
 })
 
+test('batch rollup waits for construction seal and reports interrupted construction honestly', async (t) => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'dsh-session-control-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const store = await new OperationStore({ stateDir: directory, maxOperations: 20 }).load()
+  await store.add({
+    ...operation('sealed-parent'),
+    kind: 'batch',
+    parentId: null,
+    targetId: null,
+    expectedChildCount: 2,
+    batchSealed: false,
+    batchConstructionIncomplete: false,
+  })
+  await store.add({ ...operation('only-child'), parentId: 'sealed-parent', status: 'completed' })
+  assert.equal(store.get('sealed-parent').status, 'prepared')
+  await store.update('sealed-parent', {
+    batchSealed: true,
+    batchConstructionIncomplete: true,
+    reason: 'restart-interrupted-batch-construction',
+  })
+  assert.equal(store.get('sealed-parent').status, 'partial')
+
+  await store.add({
+    ...operation('empty-parent'),
+    kind: 'batch',
+    parentId: null,
+    targetId: null,
+    batchSealed: false,
+  })
+  await store.update('empty-parent', {
+    batchSealed: true,
+    batchConstructionIncomplete: true,
+  })
+  assert.equal(store.get('empty-parent').status, 'failed')
+  await store.dispose()
+})
+
 test('scan operation reports unresolved approval and user input', () => {
   const op = operation()
   const base = [
@@ -161,6 +198,8 @@ test('version one snapshots migrate to revision cursors', async (t) => {
   const store = await new OperationStore({ stateDir: directory, maxOperations: 20 }).load()
   assert.equal(store.get('legacy').kind, 'send')
   assert.equal(store.get('legacy').revision, 1)
+  assert.equal(store.get('legacy').completionDelivery, 'manual')
+  assert.equal(store.get('legacy').notification, null)
   await store.update('legacy', { status: 'completed' })
   assert.equal(store.get('legacy').revision > 1, true)
   await store.dispose()

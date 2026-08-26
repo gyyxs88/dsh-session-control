@@ -252,6 +252,7 @@ test('send captures pre-followup status and is idempotent', async (t) => {
   const first = await api.send(args, exec)
   assert.equal(first.ok, true)
   assert.equal(first.operation.queued, false)
+  assert.equal(first.operation.completion_delivery, 'followup')
   assert.equal(target.inbox.length, 1)
 
   await assert.rejects(() => api.send({
@@ -276,6 +277,22 @@ test('send captures pre-followup status and is idempotent', async (t) => {
   assert.equal(duplicate.duplicate, true)
   assert.equal(duplicate.operation.operation_id, first.operation.operation_id)
   assert.equal(target.inbox.length, 1)
+})
+
+test('send supports explicit manual completion delivery and binds it to idempotency', async (t) => {
+  const { source, target, api } = await fixture(t)
+  const exec = { agent: source, signal: new AbortController().signal }
+  const args = {
+    target_id: target.id,
+    content: 'manual polling task',
+    idempotency_key: 'send-manual-001',
+    completion_delivery: 'manual',
+  }
+  const first = await api.send(args, exec)
+  assert.equal(first.operation.completion_delivery, 'manual')
+  const duplicate = await api.send(args, exec)
+  assert.equal(duplicate.duplicate, true)
+  await assert.rejects(() => api.send({ ...args, completion_delivery: 'followup' }, exec), /completion_delivery/u)
 })
 
 test('cross-workspace target and operation theft are rejected', async (t) => {

@@ -10,6 +10,8 @@
 
 跨会话 relay 的持久 `user/message.source` 会记录版本化来源元数据：固定生产者 `dsh-session-control`、来源/目标 Session、operation、展示方 `DSH`，以及发送时的有界来源任务标题。标题只用于展示，不参与授权；来源身份和 operation 仍由 Host 已验证对象写入，界面不得从消息正文推断可信来源。这样冷会话重开、分页和页面刷新后仍能显示“由 DSH 从任务……发送”。
 
+`session_send` / `session_batch_send` 默认是“派发即返回”：来源会话无需保持当前轮等待。send 或 batch 进入终态/需关注状态时，插件用稳定消息 ID 写入一份可去重的 `operation-terminal-report` / `operation-attention-report` 并调用来源会话的普通 follow-up；来源正在运行时排到后续独立轮，来源 idle 时自动唤醒。batch 只回报父 operation 的聚合结果，不逐个子项刷屏。通知状态与 operation 一起 A/B 持久化；重启先检查来源 Session/inbox 是否已有相同消息 ID，再决定落账或重投，不把响应丢失变成重复回报。升级前旧 operation 按 `manual` 迁移，不会集中回放历史结果。
+
 ## 安全模型
 
 - **默认无控制者**：`controllerSessionIds` 为空且 `authorizeAllOrdinarySessions=false` 时，不向任何 Agent 注册工具。
@@ -27,9 +29,9 @@
 | --- | --- |
 | `session_status` | 列出同一 Host 内 live 会话，可选包含持久 cold 会话 |
 | `session_events` | 默认只读显著事件元数据；Workspace Write 的正文读取需审批 |
-| `session_send` | 按控制器权限预设授权后幂等投递，返回持久 operation |
-| `session_batch_send` | 分发 1–8 项，创建 batch 父子 operation 图 |
-| `session_wait` | 只允许 operation 的来源 controller 等待结果 |
+| `session_send` | 幂等异步投递；默认终态/需关注时持久自动回报来源会话 |
+| `session_batch_send` | 分发 1–8 项，创建 batch 父子图并只发送一份聚合回报 |
+| `session_wait` | 仅供同轮依赖、显式等待或审批处理；不再是派发后的默认动作 |
 | `session_wait_many` | 同时等待 1–20 个 operation，支持 revision cursor 和需关注状态 |
 | `session_interrupt` | 按权限预设授权后中断当前轮，可等待真正 idle |
 | `session_cancel` | 精确取消排队 operation；只中断属于该 operation 的活动轮 |
@@ -51,7 +53,7 @@
 
 ## 内置 Skill
 
-插件会向 DSH 的原生 Skill Registry 自动注册 `dsh-session-control`，无需用户复制文件或配置额外 skill 路径。它把自然语言请求编排为发现、项目启动、权限选择、派发、等待、定时、审批、恢复和收尾流程，同时继续以插件的实时鉴权与 operation 状态为最终事实源。
+插件会向 DSH 的原生 Skill Registry 自动注册 `dsh-session-control`，无需用户复制文件或配置额外 skill 路径。它把自然语言请求编排为发现、项目启动、权限选择、异步派发、自动回报、按需等待、定时、审批、恢复和收尾流程，同时继续以插件的实时鉴权与 operation 状态为最终事实源。
 
 该 Skill 是插件自带内容，版本和摘要随 `dsh.remote.bundledSkills` manifest 固定；项目独立 Skill 不写入本插件的 Session/operation 状态，也不由本插件自行下载或执行安装脚本。
 
@@ -103,8 +105,8 @@
 - 状态写入 `stateDir` 下 A/B 双槽 v2 快照；每代 `fsync`，启动时选择最高有效 generation。v1 自动迁移，且两槽均损坏时拒绝启动。
 - DSH 重启后从 live Session 或 `sessionPersistence.inspect()` 对未完成 send / permission operation 进行对账；不会自动重发无法确认的消息或权限批准。被重启打断且无法证明终态的 lifecycle operation 会保留幂等键并转为 `delivery-unknown` / `needs_attention`，不会冒险重复创建或销毁。
 - 每次 durable mutation 都有单调 revision；多操作等待和审计分页使用 opaque cursor，已报告状态不会重复唤醒。
-- batch 父 operation 根据子 operation 自动汇总为 running、needs-attention、completed、partial、aborted 或 failed。
-- 每来源、每目标、每分钟和总 operation 数都有上限；终态 operation 会在容量紧张时按时间淘汰。
+- batch 父 operation 根据子 operation 自动汇总为 running、needs-attention、completed、partial、aborted 或 failed；只有父 operation 触发自动回报。
+- 每来源、每目标、每分钟和总 operation 数都有上限；历史手动 operation 或已确认回报的终态根 operation 可在容量紧张时按时间淘汰，尚未交付的自动回报不会被提前清除。
 
 ## 生命周期边界
 
