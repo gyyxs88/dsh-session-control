@@ -182,5 +182,8 @@ test('formal execution policy is derived from the real target Session after proj
   assert.equal(policy.result.verified, true)
   assert.equal(policy.result.targetSessionId, 'target-session')
   assert.equal(policy.result.workspaceRoot, '/srv/project')
+  const downgraded = await port.verifyTargetSessionPolicy({ hostId: 'remote-host', sourceHostId: 'local-host', sourceSessionId: 'controller', targetSessionId: 'target-session', request: { permission: 'read-only' } })
+  assert.equal(downgraded.result.permission, 'read-only')
+  await assert.rejects(port.verifyTargetSessionPolicy({ hostId: 'remote-host', sourceHostId: 'local-host', sourceSessionId: 'controller', targetSessionId: 'target-session', request: { permission: 'danger-full-access' } }), /exceeds target Session/)
   await assert.rejects(port.verifyTargetSessionPolicy({ hostId: 'remote-host', sourceHostId: 'forged-host', sourceSessionId: 'controller', targetSessionId: 'target-session', request: {} }), /authorized/)
 })

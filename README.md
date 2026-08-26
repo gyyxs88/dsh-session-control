@@ -20,6 +20,7 @@
 - **权限预设决定授权方式**：Workspace Write 控制器的副作用继续走 `tools/pre-execute → ask`；只有当前原生预设确认为 `danger-full-access` 的控制器可自主执行。判定读取 DSH 会话事件折叠结果，不接受消息自报。
 - **子会话审批不错误集中**：仅由 `danger-full-access` 控制器创建/恢复的受管会话，以及该控制器发起的 relay / Schedule 轮次，可把目标审批路由回来源控制器；Workspace Write 控制器不截获，人工审批卡保留在子会话 UI。
 - **权限调整按方向授权**：Full access 控制器可自主升降子会话权限；Workspace Write 控制器调整到 `read-only` / `workspace-write` 时在来源审批，提升为 `danger-full-access` 时必须在目标子会话 UI 人工审批。
+- **子代理可以只降权**：外部编码代理可在当前目标 Session 权限之下请求 `read-only` 或 `workspace-write`；Session Control 每次按目标 Session 实时验证，任何提权请求都会在启动前拒绝。
 - **中继降权**：目标系统提示明确把 `<dsh-session-relay>` 视作不受信委派；正文 JSON 会转义 `<`，不能闭合包裹。中继触发的轮次不能调用任何会话控制工具。
 - **单向编排**：目标默认没有控制工具；即使目标也是 controller，中继轮也会被 Host 拒绝，阻断 A→B→A 自动循环。
 
