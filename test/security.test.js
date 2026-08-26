@@ -95,6 +95,7 @@ test('approval reason binds target, preview, hash and idempotency key', () => {
   assert.match(reason, /session-target/u)
   assert.match(reason, /执行一个可核对的测试/u)
   assert.match(reason, new RegExp(contentHash(content), 'u'))
+  assert.match(reason, /followup/u)
   assert.match(reason, /acceptance-001/u)
 })
 

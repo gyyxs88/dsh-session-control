@@ -34,6 +34,8 @@ test('bundled skill is a complete model and user invocable DSH skill', async () 
   ]) {
     assert.match(skill.content, new RegExp(required, 'u'))
   }
+  assert.match(skill.content, /completion_delivery=followup/u)
+  assert.match(skill.content, /不要为了监督而反复调用 `session_wait`/u)
 })
 
 test('bundled skill parser fails closed on an incomplete skill', () => {
