@@ -66,3 +66,23 @@ test('read-only and Full Access policies do not expose a manual approval callbac
   const full = await resolver({ exec: { agent: target } })
   assert.equal(full.approvalHandler, undefined)
 })
+
+test('a child run may safely downgrade target permission but never elevate it', async () => {
+  const { target, ctx } = makeContext(async () => 'allowed-once')
+  const { resolver, verifier } = createSessionControlExecutionPolicyServices({ ctx })
+  const downgraded = await resolver({ exec: { agent: target }, request: { executionPermission: 'read-only' } })
+  assert.equal(downgraded.permission, 'read-only')
+  assert.equal(downgraded.approvalHandler, undefined)
+  const verified = await verifier.verifyTargetSessionPolicy({ exec: { agent: target }, policy: downgraded })
+  assert.equal(verified.permission, 'read-only')
+
+  ctx.permissionPresets.current = () => 'read-only'
+  await assert.rejects(
+    resolver({ exec: { agent: target }, request: { executionPermission: 'workspace-write' } }),
+    (error) => error?.code === 'EXECUTION_POLICY_ELEVATION_REQUIRED',
+  )
+  await assert.rejects(
+    verifier.verifyTargetSessionPolicy({ exec: { agent: target }, policy: { ...downgraded, permission: 'workspace-write' } }),
+    (error) => error?.code === 'EXECUTION_POLICY_ELEVATION_REQUIRED',
+  )
+})
