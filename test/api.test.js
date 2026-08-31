@@ -4,6 +4,8 @@ import os from 'node:os'
 import path from 'node:path'
 import test from 'node:test'
 
+import { isJsonValue } from '@deepseek-ai/dsh-session'
+
 import {
   apply,
   createApprovalBroker,
@@ -1209,6 +1211,73 @@ test('status and paged events can inspect same-workspace cold sessions without r
     before_seq: page.page.older_before_seq,
   }, exec)
   assert.deepEqual(older.events.map((event) => event.seq), [0, 1])
+  await cleanup()
+})
+
+test('session_events returns lossless current DSH tool results and separates content grants', async (t) => {
+  const { source, target, store, api } = await fixture(t)
+  target.session.events.push(
+    {
+      seq: 0,
+      type: 'tool/call',
+      data: {
+        turn: 1,
+        step: 1,
+        callId: 'current-call',
+        name: 'pwsh',
+        arguments: '{"command":"SECRET-COMMAND"}',
+      },
+    },
+    {
+      seq: 1,
+      type: 'tool/result',
+      data: {
+        turn: 1,
+        step: 1,
+        message: {
+          source: { kind: 'tool', callId: 'current-call' },
+          content: [{
+            type: 'tool-result',
+            toolCallId: 'current-call',
+            content: [{ type: 'text', text: 'SECRET-RESULT' }],
+            isError: false,
+          }],
+        },
+      },
+    },
+  )
+  const cleanup = registerControllerTools(source.ctx, api, store)
+  const exec = { agent: source, signal: new AbortController().signal }
+
+  const metadata = await source.tools.get('session_events').execute({
+    target_id: target.id,
+    limit: 10,
+  }, exec)
+  assert.equal(isJsonValue(metadata), true)
+  assert.equal(metadata.events[0].call_id, 'current-call')
+  assert.equal(metadata.events[0].arguments, undefined)
+  assert.equal(metadata.events[1].call_id, 'current-call')
+  assert.equal(metadata.events[1].text, undefined)
+
+  const ordinaryContent = await source.tools.get('session_events').execute({
+    target_id: target.id,
+    limit: 10,
+    include_content: true,
+  }, exec)
+  assert.equal(isJsonValue(ordinaryContent), true)
+  assert.equal(ordinaryContent.events[0].arguments, undefined)
+  assert.equal(ordinaryContent.events[1].text, undefined)
+
+  const toolContent = await source.tools.get('session_events').execute({
+    target_id: target.id,
+    limit: 10,
+    include_tool_results: true,
+  }, exec)
+  assert.equal(isJsonValue(toolContent), true)
+  assert.equal(toolContent.include_content, false)
+  assert.equal(toolContent.include_tool_results, true)
+  assert.equal(toolContent.events[0].arguments, '{"command":"SECRET-COMMAND"}')
+  assert.equal(toolContent.events[1].text, 'SECRET-RESULT')
   await cleanup()
 })
 

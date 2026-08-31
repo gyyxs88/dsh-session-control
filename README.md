@@ -50,7 +50,7 @@
 | `session_project_open` | 按权限预设授权后完成目录、Workspace、会话创建与 attach |
 | `session_operations` | 分页查看来源 controller 自己的持久 operation |
 
-`session_status(include_cold=true)` 可以同时列出当前授权范围内的持久 cold 会话。`session_events` 支持 `before_seq` / `after_seq` 分页并可直接读取 cold 历史；正文与工具参数/结果在 Workspace Write 下需人工审批，在 `danger-full-access` 下由控制器自主读取。`session_open` 可覆盖 provider、model、reasoning effort 和初始权限，模型覆盖值会先经 DSH LLM Core 精确校验。
+`session_status(include_cold=true)` 可以同时列出当前授权范围内的持久 cold 会话。`session_events` 支持 `before_seq` / `after_seq` 分页并可直接读取 cold 历史；`include_content` 只开放用户/助手正文与 Schedule 提示，`include_tool_results` 才开放工具参数和嵌套结果，两者在 Workspace Write 下均需人工审批，在 `danger-full-access` 下由控制器自主读取。事件摘要兼容当前 DSH 把工具结果调用 ID 写入 `message.source.callId` 的结构和旧版顶层 `callId`，所有缺失坐标固定返回 `null`，确保工具输出始终满足 DSH 的无损 JSON 边界。`session_open` 可覆盖 provider、model、reasoning effort 和初始权限，模型覆盖值会先经 DSH LLM Core 精确校验。
 
 ## 内置 Skill
 
