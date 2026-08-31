@@ -12,6 +12,7 @@ description: 用自然语言编排 DSH 普通会话、工作区、权限、审�
 ## 先确定目标和运行方式
 
 - 用 `session_status(include_cold=true)` 发现普通会话；需要按目录定位或新建项目时先用 `session_workspace_list`。
+- 从用户、状态列表或工具结果获得 `session-...` 会话 ID 后必须原样传递，不能剥离 `session-` 前缀，也不能把可变标题或 Workspace ID 当成会话 ID。
 - 在代码模式调用没有业务参数的工具时也要显式传空对象，例如 `session_workspace_list({})`、`session_approval_list({})`；不要省略参数对象，否则 DSH 的无损 JSON 绑定会拒绝调用。
 - 优先使用标题、工作目录、live/cold 状态和最近活动识别目标。只有多个候选无法可靠区分且选错会造成实质影响时，才向用户询问。
 - 插件可以控制同一 DSH Host 内不同 Workspace 的普通会话，但不能跨 Host，也不管理 subagent。subagent 使用 DSH 原生控制工具。

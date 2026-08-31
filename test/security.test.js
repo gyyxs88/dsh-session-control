@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import path from 'node:path'
 
+import { isJsonValue } from '@deepseek-ai/dsh-session'
+
 import {
   PLUGIN_ID,
   admitControllerAgent,
@@ -171,19 +173,87 @@ test('session attention distinguishes approvals and user questions', () => {
   assert.equal(question.kind, 'user-input')
 })
 
-test('tool result content is exposed only when approved content is requested', () => {
-  const event = {
+test('tool result summaries support current and legacy event shapes as lossless JSON', () => {
+  const current = {
     seq: 3,
     type: 'tool/result',
     data: {
       turn: 1,
       step: 2,
-      callId: 'call-1',
-      message: { content: [{ type: 'text', text: 'SECRET-RESULT' }] },
+      message: {
+        source: { kind: 'tool', callId: 'call-current' },
+        content: [{
+          type: 'tool-result',
+          toolCallId: 'call-current',
+          content: [{ type: 'text', text: 'SECRET-RESULT' }],
+          isError: false,
+        }],
+      },
     },
   }
-  assert.equal(summarizeEvent(event, false).text, undefined)
-  assert.equal(summarizeEvent(event, true).text, 'SECRET-RESULT')
+  const metadata = summarizeEvent(current, { includeContent: true })
+  assert.equal(metadata.call_id, 'call-current')
+  assert.equal(metadata.text, undefined)
+  assert.equal(isJsonValue(metadata), true)
+
+  const exposed = summarizeEvent(current, { includeToolResults: true })
+  assert.equal(exposed.call_id, 'call-current')
+  assert.equal(exposed.text, 'SECRET-RESULT')
+  assert.equal(isJsonValue(exposed), true)
+
+  const legacy = structuredClone(current)
+  legacy.data.callId = 'call-legacy'
+  delete legacy.data.message.source
+  assert.equal(summarizeEvent(legacy, true).call_id, 'call-legacy')
+
+  const incomplete = summarizeEvent({ seq: 4, type: 'tool/result', data: {} }, false)
+  assert.equal(incomplete.call_id, null)
+  assert.equal(incomplete.turn, null)
+  assert.equal(incomplete.step, null)
+  assert.equal(isJsonValue(incomplete), true)
+})
+
+test('current tool result clears matching user-input attention', () => {
+  const attention = sessionAttention([
+    {
+      type: 'tool/call',
+      data: { turn: 1, step: 1, callId: 'question-1', name: 'ask_user_question' },
+    },
+    {
+      type: 'tool/result',
+      data: {
+        turn: 1,
+        step: 1,
+        message: { source: { kind: 'tool', callId: 'question-1' }, content: [] },
+      },
+    },
+  ])
+  assert.deepEqual(attention, { needs_attention: false, kind: null })
+  assert.equal(isJsonValue(attention), true)
+})
+
+test('every significant event summary remains lossless when optional coordinates are absent', () => {
+  const eventTypes = [
+    'turn/start',
+    'turn/end',
+    'step/start',
+    'step/end',
+    'user/message',
+    'assistant/message',
+    'tool/call',
+    'tool/result',
+    'agent/inbox/spliced',
+    'approval/asked',
+    'approval/decided',
+    'schedule/change',
+  ]
+  for (const [seq, type] of eventTypes.entries()) {
+    const summary = summarizeEvent({ seq, type, data: {} }, {
+      includeContent: true,
+      includeToolResults: true,
+    })
+    assert.equal(isJsonValue(summary), true, `${type} summary must be lossless JSON`)
+  }
 })
 
 test('schedule event prompt is redacted unless content access was approved', () => {
