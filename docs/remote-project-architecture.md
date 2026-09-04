@@ -4,7 +4,7 @@
 
 日期：2026-08-21
 
-适用基线：DeepSeek Harness `0.1.0-rc.6` 至 `0.1.1-rc.2`
+适用基线：DeepSeek Harness `0.1.0-rc.6` 至 `0.1.2-rc.1`
 
 ## 1. 决策摘要
 
