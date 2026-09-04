@@ -28,7 +28,7 @@
 
 | 工具 | 说明 |
 | --- | --- |
-| `session_status` | 列出同一 Host 内 live 会话，可选包含持久 cold 会话 |
+| `session_status` | 指定 ID 时自动查询 live/cold；列表模式可选包含持久 cold 会话 |
 | `session_events` | 默认只读显著事件元数据；Workspace Write 的正文读取需审批 |
 | `session_send` | 幂等异步投递；默认终态/需关注时持久自动回报来源会话 |
 | `session_batch_send` | 分发 1–8 项，创建 batch 父子图并只发送一份聚合回报 |
@@ -50,7 +50,7 @@
 | `session_project_open` | 按权限预设授权后完成目录、Workspace、会话创建与 attach |
 | `session_operations` | 分页查看来源 controller 自己的持久 operation |
 
-`session_status(include_cold=true)` 可以同时列出当前授权范围内的持久 cold 会话。`session_events` 支持 `before_seq` / `after_seq` 分页并可直接读取 cold 历史；`include_content` 只开放用户/助手正文与 Schedule 提示，`include_tool_results` 才开放工具参数和嵌套结果，两者在 Workspace Write 下均需人工审批，在 `danger-full-access` 下由控制器自主读取。事件摘要兼容当前 DSH 把工具结果调用 ID 写入 `message.source.callId` 的结构和旧版顶层 `callId`，所有缺失坐标固定返回 `null`，确保工具输出始终满足 DSH 的无损 JSON 边界。`session_open` 可覆盖 provider、model、reasoning effort 和初始权限，模型覆盖值会先经 DSH LLM Core 精确校验。
+`session_status(target_id=...)` 会自动在 live Agent 与持久 cold 历史之间解析目标，不要求模型额外传 `include_cold=true`；`include_cold` 仅控制未指定目标时的列表是否扩展 cold 会话。`session_events` 支持 `before_seq` / `after_seq` 分页并可直接读取 cold 历史；`include_content` 只开放用户/助手正文与 Schedule 提示，`include_tool_results` 才开放工具参数和嵌套结果，两者在 Workspace Write 下均需人工审批，在 `danger-full-access` 下由控制器自主读取。事件摘要兼容当前 DSH 把工具结果调用 ID 写入 `message.source.callId` 的结构和旧版顶层 `callId`，所有缺失坐标固定返回 `null`，确保工具输出始终满足 DSH 的无损 JSON 边界。发送、中断等主动控制仍只接受 live 普通会话；目标未运行时会明确提示先在 DSH 中恢复。`session_open` 可覆盖 provider、model、reasoning effort 和初始权限，模型覆盖值会先经 DSH LLM Core 精确校验。
 
 ## 内置 Skill
 
