@@ -1,6 +1,6 @@
 # dsh-session-control
 
-面向 DeepSeek Harness `0.1.0-rc.6` 至 `0.1.1-rc.2` 的受权跨会话控制插件。它把早期动态 `sctrl-1` 原型改造成持久、可审计、可恢复的 Host 插件。
+面向 DeepSeek Harness `0.1.0-rc.6` 至 `0.1.2-rc.1` 的受权跨会话控制插件。它把早期动态 `sctrl-1` 原型改造成持久、可审计、可恢复的 Host 插件；在 `0.1.2` 上通过官方 `Session.snapshotEvents()` 读取不可变事件快照，同时保留对旧版本的兼容。
 
 ## 远程项目设计
 
