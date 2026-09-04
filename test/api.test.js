@@ -1197,6 +1197,13 @@ test('status and paged events can inspect same-workspace cold sessions without r
   }
   const cleanup = registerControllerTools(source.ctx, api, store)
   const exec = { agent: source, signal: new AbortController().signal }
+  const targeted = await source.tools.get('session_status').execute({
+    target_id: coldHeader.id,
+  }, exec)
+  assert.equal(targeted.count, 1)
+  assert.equal(targeted.sessions[0].id, coldHeader.id)
+  assert.equal(targeted.sessions[0].status, 'cold')
+  assert.equal(targeted.sessions[0].last_event_seq, 3)
   const status = await source.tools.get('session_status').execute({ include_cold: true }, exec)
   assert.equal(status.sessions.some((row) => row.id === coldHeader.id && row.status === 'cold'), true)
   const page = await source.tools.get('session_events').execute({
@@ -1211,6 +1218,11 @@ test('status and paged events can inspect same-workspace cold sessions without r
     before_seq: page.page.older_before_seq,
   }, exec)
   assert.deepEqual(older.events.map((event) => event.seq), [0, 1])
+  await assert.rejects(() => api.send({
+    target_id: coldHeader.id,
+    content: 'cold target cannot receive active control',
+    idempotency_key: 'cold-active-control-001',
+  }, exec), /当前未作为 live 普通会话运行.*恢复该会话为 live/u)
   await cleanup()
 })
 

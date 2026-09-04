@@ -1,6 +1,6 @@
 {
   "name": "dsh-session-control",
-  "version": "0.7.2",
+  "version": "0.7.3",
   "description": "Authorized, durable cross-session control for DeepSeek Harness",
   "keywords": [
     "deepseek-harness",
@@ -35,13 +35,13 @@
     "remote": {
       "manifestVersion": "1.0",
       "pluginId": "dsh-session-control",
-      "version": "0.7.2",
+      "version": "0.7.3",
       "placements": ["remote"],
       "protocolVersion": "1.0",
       "apiVersion": "1.0",
       "dshCompatibility": {"min": "0.1.0-rc.6", "max": "0.1.1-rc.2"},
       "capabilities": ["session-control.port", "schedule.port", "remote-project.open", "remote-project.schedule-create", "remote-project.schedule-delete", "remote-project.runtime-auth-begin", "remote-project.runtime-auth-confirm", "remote-project.execution-policy-verify"],
-      "bundledSkills": [{"id": "dsh-session-control", "version": "0.7.2", "sha256": "d6fb0279eecac6c5cf41b0d6edd824f6c5fd3ab7e581563543af3aab2cb7fd3c"}]
+      "bundledSkills": [{"id": "dsh-session-control", "version": "0.7.3", "sha256": "e38372a4c780854b60b043a74f5c5ebc1d20924d338615007bb6f4d9e648b600"}]
     }
   },
   "files": [
