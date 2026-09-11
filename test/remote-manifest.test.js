@@ -9,9 +9,10 @@ import { getRemoteProjectManifest, validateRemoteProjectManifest } from '../lib/
 test('remote manifest is machine-readable, versioned, and advertises the supported single-host bridge', async () => {
   const manifest = validateRemoteProjectManifest(packageJson.dsh.remote)
   assert.equal(manifest.pluginId, 'dsh-session-control')
-  assert.equal(manifest.version, '0.8.0')
+  assert.equal(manifest.version, '0.8.1')
   assert.deepEqual(manifest.placements, ['remote'])
-  assert.deepEqual(manifest.dshCompatibility, { min: '0.1.0-rc.6', max: '0.1.2-rc.1' })
+  assert.deepEqual(manifest.dshCompatibility, { min: '0.1.0-rc.6', max: '0.1.5-rc.2' })
+  assert.deepEqual(getRemoteProjectManifest(), packageJson.dsh.remote)
   assert.ok(manifest.capabilities.includes('session-control.port'))
   assert.ok(manifest.capabilities.includes('remote-project.schedule-create'))
   assert.equal(manifest.bundledSkills[0].id, 'dsh-session-control')
