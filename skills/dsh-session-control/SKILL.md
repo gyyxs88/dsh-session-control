@@ -9,6 +9,13 @@ description: 用自然语言编排 DSH 普通会话、工作区、权限、审�
 
 工具可见性由部署授权决定。推荐个人 DSH 启用 `authorizeAllOrdinarySessions`，使每个普通用户会话都能使用本 Skill；subagent 和会话控制插件中继轮仍不能调用这些工具。受管或多用户部署可继续使用显式 `controllerSessionIds`。
 
+## 官方优先，插件补充
+
+- DSH 原生子代理的创建、列举、父子通信和中断使用官方工具；本插件不接管 subagent，也不创建普通会话来替代原生子代理。
+- 当前会话的普通定时任务优先使用官方 schedule 工具。仅当任务需要管理另一个普通会话、跨 Workspace、批量编排、持久回报或受管审批时使用本插件的 session_* 工具；其底层继续调用官方 Session、Workspace、Schedule 和权限服务。
+- 同一工作区团队需要共享任务板时，已安装且授权适用的官方 Agent Teams 优先；实验功能未启用时不得声称可用或自动启用。
+- 已创建的 operation 留在原控制面完成对账；不要在官方与插件入口各创建一份任务，不因切换入口绕过授权、审批或幂等检查。
+
 ## 先确定目标和运行方式
 
 - 用 `session_status(include_cold=true)` 发现全部普通会话；已知完整 `target_id` 时直接调用 `session_status(target_id=...)`，工具会自动兼容 live/cold，不要把 cold 误报为不存在。需要按目录定位或新建项目时先用 `session_workspace_list`。

@@ -178,3 +178,7 @@ npm pack --dry-run
 Windows 上若系统 Node 低于 24，测试 runner 会明确拒绝并提示版本；Linux 目标上的 Unix socket bridge 集成测试在 Linux 环境执行，Windows 本地仅执行正式 port 的跨平台契约测试。
 
 测试覆盖：作用域可见性、跨工作区开关、中继轮阻断、Full Access 自主授权、Workspace Write 子会话本地审批、权限升降/方向授权/目标审批/冷会话/创建初始权限/幂等防重放、集中审批指纹/确认、Schedule 审批路由、并发幂等、批次父子汇总、cursor 多等待、精确取消、cold 历史分页、原生定时创建/隐藏/删除、项目目录与 Workspace/Session attach、Core 创建/fork/suspend、v1→v2 迁移、A/B 状态恢复和损坏双槽 fail-closed。
+
+## 官方优先策略
+
+原生子代理、父子通信及当前会话定时任务优先使用官方入口。本插件只补普通会话之间的跨项目控制、批量操作、持久回报与受管审批，底层复用官方服务。已有 operation 继续由原入口对账，不重复派发，不以普通会话模拟原生子代理。
