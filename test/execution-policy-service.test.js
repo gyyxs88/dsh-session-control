@@ -7,7 +7,7 @@ function makeContext(request) {
   const calls = []
   const ctx = {
     agents: { get(id) { return id === target.id ? target : undefined } },
-    permissionPresets: { current() { return 'workspace-write' } },
+    permissionPresets: { current(session) { assert.equal(session, target.session); return 'workspace-write' } },
     approval: { request: async (value) => { calls.push(value); return request(value) } },
   }
   return { target, calls, ctx }

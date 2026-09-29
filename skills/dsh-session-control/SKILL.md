@@ -55,7 +55,11 @@ description: 用自然语言编排 DSH 普通会话、工作区、权限、审�
 4. 若返回 `permission_operation`，单独等待该 operation。权限未结算前不要声称目标已具备所请求权限。
 5. 会话可用后，用 `session_send` 投递完整目标并保存 operation。默认终态/需关注状态会由插件持久回报并自动唤醒来源会话；若同一请求还要求定时检查，先创建并验证定时任务，然后结束本轮即可。
 
-只需注册目录时使用 `session_workspace_add`。在现有 Workspace 创建、恢复或从完整 turn 边界 fork 会话时使用 `session_open`。`session_open` 不创建 Git worktree；需要代码隔离时必须让目标会话在项目内另行采用仓库支持的隔离方式。
+只需注册目录时使用 `session_workspace_add`。用户明确要求取消工作区登记时，先用 `session_workspace_list` 找到准确的 Workspace，再将其 `workspace_id` 与显示的绝对 `path` 分别作为 `workspace_id` 和 `expected_path` 传给 `session_workspace_remove`，并为这次逻辑操作生成稳定幂等键。ID 或规范路径不匹配、或登记已不存在时停止并对账，不猜测目标、不换路径重试。
+
+`session_workspace_remove` 仅取消 Workspace Registry 登记，绝不表示删除目录、文件、会话或 session log；因此工具完成后项目内容和历史会话仍保留。read-only 控制会话不能执行；Workspace Write 需要本次人工审批；Full access 按现有 `canDelegate` 规则执行。审批理由应核对 Workspace ID 与路径；未经用户明确要求，不要把“取消登记”描述成删除项目或清除历史。
+
+在现有 Workspace 创建、恢复或从完整 turn 边界 fork 会话时使用 `session_open`。`session_open` 不创建 Git worktree；需要代码隔离时必须让目标会话在项目内另行采用仓库支持的隔离方式。
 
 ## 派发、跟踪和继续
 

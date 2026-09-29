@@ -30,8 +30,9 @@ function makeAgent(id, cwd, { status = 'idle', events = [] } = {}) {
     id,
     header: { id, cwd },
     events,
+    snapshotEvents() { return [...this.events] },
     append(type, data) {
-      const event = { seq: this.events.length, type, data }
+      const event = { seq: this.events.length, time: Date.now(), type, data }
       this.events.push(event)
       return event
     },
@@ -73,7 +74,7 @@ function makePermissionRuntime(request = async () => 'rejected') {
     'workspace-write': { sandbox: 'workspace-write', approval: 'ask' },
     'danger-full-access': { sandbox: 'danger-full-access', approval: 'never' },
   }
-  const current = (events) => events.findLast((event) => event.type === 'permission/preset')
+  const current = (session) => session.snapshotEvents().findLast((event) => event.type === 'permission/preset')
     ?.data?.preset ?? 'workspace-write'
   const approval = {
     setPolicy(agent, policy) {
@@ -91,12 +92,13 @@ function makePermissionRuntime(request = async () => 'rejected') {
       if (spec === undefined) throw new Error(`unknown permission preset ${name}`)
       return spec
     },
-    apply(session, name, setApproval) {
+    set(session, name) {
       const spec = this.resolve(name)
-      if (current(session.events) !== name) session.append('permission/preset', { preset: name })
+      if (current(session) !== name) session.append('permission/preset', { preset: name })
       const sandbox = session.events.findLast((event) => event.type === 'sandbox/mode')?.data?.mode
       if (sandbox !== spec.sandbox) session.append('sandbox/mode', { mode: spec.sandbox })
-      setApproval(spec.approval)
+      const approvalPolicy = session.events.findLast((event) => event.type === 'approval/policy')?.data?.policy
+      if (approvalPolicy !== spec.approval) session.append('approval/policy', { policy: spec.approval })
     },
   }
   return { approval, permissionPresets }
@@ -368,7 +370,7 @@ test('full-access controller persistently raises and lowers child permission wit
   assert.equal(raised.ok, true)
   assert.equal(raised.changed, true)
   assert.equal(raised.operation.permission_authorization, 'autonomous-by-danger-full-access-controller')
-  assert.equal(ctx.permissionPresets.current(target.session.events), 'danger-full-access')
+  assert.equal(ctx.permissionPresets.current(target.session), 'danger-full-access')
 
   const lowered = await api.setPermission({
     target_id: target.id,
@@ -377,11 +379,11 @@ test('full-access controller persistently raises and lowers child permission wit
     idempotency_key: 'permission-lower-001',
   }, exec)
   assert.equal(lowered.ok, true)
-  assert.equal(ctx.permissionPresets.current(target.session.events), 'read-only')
+  assert.equal(ctx.permissionPresets.current(target.session), 'read-only')
 
   const duplicate = await api.setPermission(raisedArgs, exec)
   assert.equal(duplicate.duplicate, true)
-  assert.equal(ctx.permissionPresets.current(target.session.events), 'read-only')
+  assert.equal(ctx.permissionPresets.current(target.session), 'read-only')
   const viewed = await api.getPermission({ target_id: target.id }, exec)
   assert.equal(viewed.permission_preset, 'read-only')
   assert.equal(viewed.approval_policy, 'ask')
@@ -424,7 +426,7 @@ test('workspace-write Full access elevation is approved in the child turn and hi
   assert.match(approvalReasonText, /持久权限/u)
   assert.match(approvalReasonText, /child needs autonomous deployment access/u)
   assert.deepEqual(decision, { kind: 'enter', messages: [] })
-  assert.equal(ctx.permissionPresets.current(target.session.events), 'danger-full-access')
+  assert.equal(ctx.permissionPresets.current(target.session), 'danger-full-access')
   const settled = store.get(queued.operation.operation_id)
   assert.equal(settled.status, 'completed')
   assert.equal(settled.permissionAuthorization, 'approved-once-by-human-at-target')
@@ -454,7 +456,7 @@ test('workspace-write child rejection and stale target state perform zero permis
     step: 1,
     signal: new AbortController().signal,
   }, async () => ({ kind: 'enter', messages: [rejectedTarget.inbox[0]] }))
-  assert.equal(ctx.permissionPresets.current(rejectedTarget.session.events), 'workspace-write')
+  assert.equal(ctx.permissionPresets.current(rejectedTarget.session), 'workspace-write')
   assert.equal(store.get(rejected.operation.operation_id).status, 'failed')
 
   const stale = await api.setPermission({
@@ -472,7 +474,7 @@ test('workspace-write child rejection and stale target state perform zero permis
     step: 1,
     signal: new AbortController().signal,
   }, async () => ({ kind: 'enter', messages: [staleTarget.inbox[0]] }))
-  assert.equal(ctx.permissionPresets.current(staleTarget.session.events), 'read-only')
+  assert.equal(ctx.permissionPresets.current(staleTarget.session), 'read-only')
   assert.equal(store.get(stale.operation.operation_id).status, 'failed')
   assert.equal(approvals, 1)
 })
@@ -489,7 +491,7 @@ test('session creation can request child-approved initial Full access', async (t
   assert.equal(created.permission_pending, true)
   assert.equal(created.operation.child_ids.length, 1)
   const child = agents.find((agent) => agent.id === created.session_id)
-  assert.equal(ctx.permissionPresets.current(child.session.events), 'workspace-write')
+  assert.equal(ctx.permissionPresets.current(child.session), 'workspace-write')
   child.session.append('turn/start', { turn: 1 })
   await api.handlePermissionPreStep({
     agent: child,
@@ -498,7 +500,7 @@ test('session creation can request child-approved initial Full access', async (t
     step: 1,
     signal: new AbortController().signal,
   }, async () => ({ kind: 'enter', messages: [child.inbox[0]] }))
-  assert.equal(ctx.permissionPresets.current(child.session.events), 'danger-full-access')
+  assert.equal(ctx.permissionPresets.current(child.session), 'danger-full-access')
   assert.equal(store.get(created.operation.child_ids[0]).status, 'completed')
 })
 
@@ -509,7 +511,11 @@ test('full-access controller changes a cold child permission and returns it to c
   let persistedEvents = []
   ctx.sessionPersistence.inspect = async (id) => {
     assert.equal(id, target.id)
-    return { meta: { id, cwd: '/workspace/work' }, events: [...persistedEvents] }
+    return {
+      meta: { version: 4, id, cwd: '/workspace/work', createdAt: 1, isSeeded: false },
+      inheritedEventCount: 0,
+      events: [...persistedEvents],
+    }
   }
   ctx.sessions.flush = async (session) => {
     if (session.id === target.id) persistedEvents = [...session.events]
@@ -564,7 +570,7 @@ test('restart never replays an unconfirmed child permission approval', async (t)
   const recovered = store.get(operation.id)
   assert.equal(recovered.status, 'failed')
   assert.match(recovered.reason, /permission-restart-not-replayed/u)
-  assert.equal(ctx.permissionPresets.current(target.session.events), 'workspace-write')
+  assert.equal(ctx.permissionPresets.current(target.session), 'workspace-write')
 })
 
 test('permission persistence uncertainty is reconciled without replaying the change', async (t) => {
@@ -583,7 +589,7 @@ test('permission persistence uncertainty is reconciled without replaying the cha
   })
   assert.equal(uncertain.ok, false)
   assert.equal(uncertain.operation.status, 'delivery-unknown')
-  assert.equal(ctx.permissionPresets.current(target.session.events), 'danger-full-access')
+  assert.equal(ctx.permissionPresets.current(target.session), 'danger-full-access')
   const duplicate = await api.setPermission(args, {
     agent: source,
     signal: new AbortController().signal,
@@ -1141,7 +1147,7 @@ test('project open creates a directory, registers its workspace, and attaches a 
   assert.deepEqual(ctx.workspaceRegistry.list()[0].sessionIds, [result.session_id])
   const projectAgent = agents.find((agent) => agent.id === result.session_id)
   assert.equal(projectAgent.session.header.cwd, projectPath)
-  assert.equal(ctx.permissionPresets.current(projectAgent.session.events), 'read-only')
+  assert.equal(ctx.permissionPresets.current(projectAgent.session), 'read-only')
   assert.equal(result.permission_operation.requested_permission_preset, 'read-only')
 
   const duplicate = await api.openProject({

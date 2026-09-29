@@ -96,6 +96,9 @@
 ## 工作区与项目启动
 
 - `session_workspace_add` 只接受绝对路径；可递归创建不存在的目录，然后调用 `ctx.workspaceRegistry.create()`。规范路径已存在时幂等复用。
+- `session_workspace_remove` 只取消 DSH Workspace Registry 中的登记，不删除工作区目录、文件、会话或 session log。调用必须同时提供已登记的 `workspace_id` 和 `expected_path`；插件核对 ID 对应实体的规范绝对路径，不匹配或 ID 未登记时拒绝操作。
+- 取消登记属于注册表写操作：read-only 控制会话会被拒绝；Workspace Write 按次请求人工审批；Full access 按现有 `canDelegate` 规则自主或审批。控制器鉴权与 relay-turn 防护先于执行。成功结果和持久 operation 用于记录取消登记状态并供对账。
+- 该工具保留目录及历史会话数据；它只改变 Workspace 登记状态，不代表删除项目或其历史。重试使用相同参数和幂等键，由 operation 对账；不得把同一路径后来新登记的 Workspace 当作旧 operation 的目标。
 - `session_project_open` 复用 DSH Host 的正式顺序：确保目录 → 注册 Workspace → Core Agent Factory 创建会话 → `Workspace.attachSession()`。
 - Agent 创建成功但 Workspace attach 失败时返回 `partial`，不会删除目录、Workspace 或已经创建的会话来掩盖部分成功。
 
