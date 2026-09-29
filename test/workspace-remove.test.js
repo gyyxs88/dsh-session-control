@@ -35,6 +35,10 @@ const args = { workspace_id: 'workspace-1', expected_path: projectDir, idempoten
 
 await assert.rejects(api.removeWorkspace(args, { agent: outsider }), /控制权限/u)
 await assert.rejects(api.removeWorkspace({ ...args, expected_path: path.join(stateDir, 'wrong') }, exec), /不匹配/u)
+if (process.platform === 'win32') {
+  await assert.rejects(api.removeWorkspace({ ...args, expected_path: '\\project' }, exec), /完全限定/u)
+  await assert.rejects(api.removeWorkspace({ ...args, expected_path: 'C:project' }, exec), /完全限定/u)
+}
 await assert.rejects(api.removeWorkspace({ ...args, workspace_id: 'unknown' }, exec), /未登记/u)
 assert.equal(deleteCalls, 0)
 
@@ -50,6 +54,9 @@ assert.equal(again.ok, true)
 assert.equal(again.duplicate, true)
 assert.equal(deleteCalls, 1)
 await assert.rejects(api.removeWorkspace({ ...args, workspace_id: 'workspace-2' }, exec), /幂等键/u)
+entries.set('workspace-new', { id: 'workspace-new', path: projectDir, title: 'New registration' })
+assert.equal((await api.removeWorkspace(args, exec)).workspace_removed, false)
+assert.equal(entries.has('workspace-new'), true)
 
 entries.set('workspace-3', { id: 'workspace-3', path: projectDir, title: 'Again' })
 const recoverArgs = { ...args, workspace_id: 'workspace-3', idempotency_key: 'remove-main-002' }

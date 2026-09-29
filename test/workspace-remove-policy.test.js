@@ -62,6 +62,10 @@ preset = 'read-only'
 assert.equal(decision().kind, 'deny')
 preset = 'workspace-write'
 assert.equal(decision(source, { expected_path: path.join(stateDir, 'wrong') }).kind, 'deny')
+if (process.platform === 'win32') {
+  assert.equal(decision(source, { expected_path: '\\project' }).kind, 'deny')
+  assert.equal(decision(source, { expected_path: 'C:project' }).kind, 'deny')
+}
 const ask = decision()
 assert.equal(ask.kind, 'ask')
 assert.match(ask.reason, /保留目录和会话日志/u)

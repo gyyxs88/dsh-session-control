@@ -859,6 +859,7 @@ test('controller tools register only in the supplied scoped context', async (t) 
     'session_wait_many',
     'session_workspace_add',
     'session_workspace_list',
+    'session_workspace_remove',
   ])
   await cleanup()
   assert.equal(source.tools.size, 0)
