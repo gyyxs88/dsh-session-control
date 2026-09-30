@@ -41,7 +41,7 @@ test('formal remote project port delegates to the official API', async () => {
     hostId: 'remote-host',
     sourceAllowlist: [{ sourceHostId: 'local-host', sourceSessionId: 'controller', controllerSessionId: 'controller' }],
     api: { async openProject(args, exec) { captured = { args, exec }; return { ok: true, workspace_id: 'w', session_id: 's', workspace: { path: args.path } } } },
-    ctx: { agents: { get(id) { return id === 'controller' ? sourceAgent : undefined } } },
+    ctx: { permissionPresets: { current: () => 'danger-full-access' }, agents: { get(id) { return id === 'controller' ? sourceAgent : undefined } } },
   })
   const response = await port.openProject({ hostId: 'remote-host', sourceHostId: 'local-host', sourceSessionId: 'controller', request: { absolutePath: '/srv/project', idempotencyKey: 'project-key-001', desiredState: { defaultPermission: 'workspace-write' } } })
   assert.equal(response.type, 'remote-project.result')
@@ -61,7 +61,7 @@ test('formal remote project port deletes a schedule through the official API and
       async openProject() { throw new Error('not used') },
       async deleteSchedule(args, exec) { captured = { args, exec }; return { ok: true, result: { deleted: true } } },
     },
-    ctx: { agents: { get(id) { return id === 'controller' ? sourceAgent : undefined } } },
+    ctx: { permissionPresets: { current: () => 'danger-full-access' }, agents: { get(id) { return id === 'controller' ? sourceAgent : undefined } } },
   })
   const response = await port.deleteSchedule({
     type: 'remote-project.schedule-delete',
@@ -89,7 +89,7 @@ test('formal remote project port creates a schedule through the official API wit
       async openProject() { throw new Error('must not reopen project') },
       async createSchedule(args, exec) { captured = { args, exec }; return { ok: true, schedule: { id: 'schedule-1' } } },
     },
-    ctx: { agents: { get(id) { return id === 'controller' ? sourceAgent : undefined } } },
+    ctx: { permissionPresets: { current: () => 'danger-full-access' }, agents: { get(id) { return id === 'controller' ? sourceAgent : undefined } } },
   })
   const response = await port.createSchedule({
     type: 'remote-project.schedule-create', hostId: 'remote-host', sourceHostId: 'local-host', sourceSessionId: 'controller', targetSessionId: 'target-session',
@@ -156,7 +156,7 @@ test('formal runtime auth binds source capability and exact nonce before any tar
     hostId: 'remote-host',
     sourceAllowlist: [{ sourceHostId: 'local-host', sourceSessionId: 'controller', controllerSessionId: 'controller' }],
     api: { async openProject() { throw new Error('not used') } },
-    ctx: { agents: { get(id) { return id === 'controller' ? sourceAgent : undefined } } },
+    ctx: { permissionPresets: { current: () => 'danger-full-access' }, agents: { get(id) { return id === 'controller' ? sourceAgent : undefined } } },
   })
   const request = { runtimeId: 'codex', version: '1.0.0', sha256: 'a'.repeat(64), challengeId: 'challenge-000000000000', nonce: 'nonce_abcdefghijklmnopqrstuvwxyz012345', expiresAt: new Date(Date.now() + 60_000).toISOString() }
   const begun = await port.beginRuntimeAuth({ hostId: 'remote-host', sourceHostId: 'local-host', sourceSessionId: 'controller', request })
@@ -175,7 +175,7 @@ test('formal execution policy is derived from the real target Session after proj
     api: { async openProject() { throw new Error('not used') } },
     ctx: {
       agents: { get(id) { return id === 'controller' ? sourceAgent : id === 'target-session' ? targetAgent : undefined } },
-      permissionPresets: { current() { return 'workspace-write' } },
+      permissionPresets: { current(session) { return session === sourceAgent.session ? 'danger-full-access' : 'workspace-write' } },
     },
   })
   const policy = await port.verifyTargetSessionPolicy({ hostId: 'remote-host', sourceHostId: 'local-host', sourceSessionId: 'controller', targetSessionId: 'target-session', request: {} })

@@ -1,5 +1,4 @@
-# Safe by default: no session receives control tools until its durable session
-# id is explicitly listed by the deployment patch that loads this bundle.
+# Only the current official danger-full-access preset admits management tools.
 - insert:
     - id: schedule
       name: '@deepseek-ai/dsh-schedule'
@@ -7,8 +6,6 @@
     - id: authorized-session-control
       name: 'dsh-session-control'
       config:
-        controllerSessionIds: []
-        authorizeAllOrdinarySessions: false
         stateDir: '.dsh-session-control'
         sameWorkspaceOnly: false
         maxPendingPerTarget: 3

@@ -144,6 +144,7 @@ async function fixture(t) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'dsh-session-control-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const source = makeAgent('controller', '/workspace/work')
+  source.session.append('permission/preset', { preset: 'danger-full-access' })
   const target = makeAgent('target', '/workspace/work')
   const otherWorkspace = makeAgent('other', '/workspace/other')
   const agents = [source, target, otherWorkspace]
@@ -300,7 +301,7 @@ test('send supports explicit manual completion delivery and binds it to idempote
 })
 
 test('cross-workspace target and operation theft are rejected', async (t) => {
-  const { source, target, otherWorkspace, api } = await fixture(t)
+  const { source, target, otherWorkspace, api, agents } = await fixture(t)
   const exec = { agent: source, signal: new AbortController().signal }
   await assert.rejects(() => api.send({
     target_id: otherWorkspace.id,
@@ -314,6 +315,8 @@ test('cross-workspace target and operation theft are rejected', async (t) => {
     idempotency_key: 'owned-operation-01',
   }, exec)
   const thief = makeAgent('second-controller', '/workspace/work')
+  thief.session.append('permission/preset', { preset: 'danger-full-access' })
+  agents.push(thief)
   await assert.rejects(() => api.wait({
     operation_id: sent.operation.operation_id,
     timeout_ms: 10,
@@ -389,117 +392,21 @@ test('full-access controller persistently raises and lowers child permission wit
   assert.equal(viewed.approval_policy, 'ask')
 })
 
-test('workspace-write Full access elevation is approved in the child turn and hidden from the model', async (t) => {
-  const { source, target, api, ctx, store } = await fixture(t)
-  let approvalAgent
-  let approvalReasonText
-  ctx.approval.request = async (request) => {
-    approvalAgent = request.agent
-    approvalReasonText = request.reason
-    return 'allowed-once'
-  }
-  const queued = await api.setPermission({
-    target_id: target.id,
-    permission_preset: 'danger-full-access',
-    reason: 'child needs autonomous deployment access',
-    idempotency_key: 'permission-child-ui-001',
-  }, { agent: source, signal: new AbortController().signal })
-  assert.equal(queued.pending_child_approval, true)
-  assert.equal(queued.operation.permission_authorization, 'pending-human-at-target')
-  assert.equal(target.inbox.length, 1)
-  await assert.rejects(() => api.setPermission({
-    target_id: target.id,
-    permission_preset: 'read-only',
-    reason: 'must not race the pending elevation',
-    idempotency_key: 'permission-child-race-001',
-  }, { agent: source, signal: new AbortController().signal }), /未决权限操作/u)
-  const internal = target.inbox[0]
-  target.session.append('turn/start', { turn: 1 })
-  const decision = await api.handlePermissionPreStep({
-    agent: target,
-    messages: [internal],
-    turn: 1,
-    step: 1,
-    signal: new AbortController().signal,
-  }, async () => ({ kind: 'enter', messages: [internal] }))
-  assert.equal(approvalAgent, target)
-  assert.match(approvalReasonText, /持久权限/u)
-  assert.match(approvalReasonText, /child needs autonomous deployment access/u)
-  assert.deepEqual(decision, { kind: 'enter', messages: [] })
-  assert.equal(ctx.permissionPresets.current(target.session), 'danger-full-access')
-  const settled = store.get(queued.operation.operation_id)
-  assert.equal(settled.status, 'completed')
-  assert.equal(settled.permissionAuthorization, 'approved-once-by-human-at-target')
+test('legacy listed Workspace Write controller cannot change permission or create a session', async (t) => {
+  const { source, target, api, ctx } = await fixture(t)
+  source.session.append('permission/preset', { preset: 'workspace-write' })
+  await assert.rejects(api.setPermission({ target_id: target.id, permission_preset: 'danger-full-access', reason: 'denied', idempotency_key: 'deny-permission-001' }, { agent: source }), /控制权限/u)
+  await assert.rejects(api.openSession({ mode: 'create', idempotency_key: 'deny-create-001' }, { agent: source }), /控制权限/u)
+  assert.equal(target.inbox.length, 0)
+  assert.equal(ctx.permissionPresets.current(target.session), 'workspace-write')
 })
 
-test('workspace-write child rejection and stale target state perform zero permission change', async (t) => {
+test('session creation from Full Access applies its requested initial permission', async (t) => {
   const { source, agents, api, ctx, store } = await fixture(t)
-  const rejectedTarget = makeAgent('permission-rejected-target', '/workspace/work')
-  const staleTarget = makeAgent('permission-stale-target', '/workspace/work')
-  agents.push(rejectedTarget, staleTarget)
-  let approvals = 0
-  ctx.approval.request = async () => {
-    approvals += 1
-    return 'rejected'
-  }
-  const rejected = await api.setPermission({
-    target_id: rejectedTarget.id,
-    permission_preset: 'danger-full-access',
-    reason: 'rejection path',
-    idempotency_key: 'permission-rejected-001',
-  }, { agent: source, signal: new AbortController().signal })
-  rejectedTarget.session.append('turn/start', { turn: 1 })
-  await api.handlePermissionPreStep({
-    agent: rejectedTarget,
-    messages: [rejectedTarget.inbox[0]],
-    turn: 1,
-    step: 1,
-    signal: new AbortController().signal,
-  }, async () => ({ kind: 'enter', messages: [rejectedTarget.inbox[0]] }))
-  assert.equal(ctx.permissionPresets.current(rejectedTarget.session), 'workspace-write')
-  assert.equal(store.get(rejected.operation.operation_id).status, 'failed')
-
-  const stale = await api.setPermission({
-    target_id: staleTarget.id,
-    permission_preset: 'danger-full-access',
-    reason: 'stale path',
-    idempotency_key: 'permission-stale-001',
-  }, { agent: source, signal: new AbortController().signal })
-  staleTarget.session.append('permission/preset', { preset: 'read-only' })
-  staleTarget.session.append('turn/start', { turn: 1 })
-  await api.handlePermissionPreStep({
-    agent: staleTarget,
-    messages: [staleTarget.inbox[0]],
-    turn: 1,
-    step: 1,
-    signal: new AbortController().signal,
-  }, async () => ({ kind: 'enter', messages: [staleTarget.inbox[0]] }))
-  assert.equal(ctx.permissionPresets.current(staleTarget.session), 'read-only')
-  assert.equal(store.get(stale.operation.operation_id).status, 'failed')
-  assert.equal(approvals, 1)
-})
-
-test('session creation can request child-approved initial Full access', async (t) => {
-  const { source, agents, api, ctx, store } = await fixture(t)
-  ctx.approval.request = async () => 'allowed-once'
-  const created = await api.openSession({
-    mode: 'create',
-    permission_preset: 'danger-full-access',
-    idempotency_key: 'create-permission-full-001',
-  }, { agent: source, signal: new AbortController().signal })
+  const created = await api.openSession({ mode: 'create', permission_preset: 'danger-full-access', idempotency_key: 'create-permission-full-001' }, { agent: source })
   assert.equal(created.ok, true)
-  assert.equal(created.permission_pending, true)
-  assert.equal(created.operation.child_ids.length, 1)
-  const child = agents.find((agent) => agent.id === created.session_id)
-  assert.equal(ctx.permissionPresets.current(child.session), 'workspace-write')
-  child.session.append('turn/start', { turn: 1 })
-  await api.handlePermissionPreStep({
-    agent: child,
-    messages: [child.inbox[0]],
-    turn: 1,
-    step: 1,
-    signal: new AbortController().signal,
-  }, async () => ({ kind: 'enter', messages: [child.inbox[0]] }))
+  assert.equal(created.permission_pending, false)
+  const child = agents.find(agent => agent.id === created.session_id)
   assert.equal(ctx.permissionPresets.current(child.session), 'danger-full-access')
   assert.equal(store.get(created.operation.child_ids[0]).status, 'completed')
 })
@@ -1038,7 +945,7 @@ test('session open creates and forks through the core factory with idempotency',
   assert.equal(forked.ok, true)
   const child = agents.find((agent) => agent.id === forked.session_id)
   assert.equal(child.session.header.parentSession, source.id)
-  assert.equal(child.session.events.length, 3)
+  assert.equal(child.session.events.length, source.session.events.length)
 })
 
 test('live recovery never scans lifecycle operations as relay sends', async (t) => {
@@ -1300,7 +1207,7 @@ test('session_events returns lossless current DSH tool results and separates con
   await cleanup()
 })
 
-test('host apply mounts tools only for configured controller and asks with bound reason', async (t) => {
+test('host dynamically mounts all Full Access sessions and revokes old tool definitions', async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'dsh-session-control-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const source = makeAgent('controller', '/workspace/work')
@@ -1309,9 +1216,9 @@ test('host apply mounts tools only for configured controller and asks with bound
   const listeners = new Map()
   const cleanups = []
   let registeredSkill
-  let permissionPreset = 'workspace-write'
+  let permissionPreset = 'danger-full-access'
   const permissions = makePermissionRuntime()
-  permissions.permissionPresets.current = () => permissionPreset
+  permissions.permissionPresets.current = session => session === source.session ? permissionPreset : 'workspace-write'
   const ctx = {
     logger: { info() {}, warn() {}, error() {}, debug() {} },
     agents: {
@@ -1373,68 +1280,32 @@ test('host apply mounts tools only for configured controller and asks with bound
   assert.equal(target.tools.has('session_send'), false)
 
   const preExecute = listeners.get('tools/pre-execute')[0]
-  const decision = preExecute({
-    name: 'session_send',
-    agent: source,
-    arguments: {
-      target_id: target.id,
-      content: 'VISIBLE-CONTENT',
-      idempotency_key: 'approval-test-001',
-    },
-  }, () => ({ kind: 'allow' }))
-  assert.equal(decision.kind, 'ask')
-  assert.match(decision.reason, /VISIBLE-CONTENT/u)
-  assert.match(decision.reason, /approval-test-001/u)
-
-  const childElevation = await preExecute({
-    name: 'session_permission_set',
-    agent: source,
-    arguments: {
-      target_id: target.id,
-      permission_preset: 'danger-full-access',
-      reason: 'child UI owns this elevation',
-      idempotency_key: 'permission-route-child-001',
-    },
-  }, () => ({ kind: 'allow' }))
-  assert.equal(childElevation.kind, 'allow')
-  const sourceApprovedLowering = await preExecute({
-    name: 'session_permission_set',
-    agent: source,
-    arguments: {
-      target_id: target.id,
-      permission_preset: 'read-only',
-      reason: 'reduce child authority',
-      idempotency_key: 'permission-route-lower-001',
-    },
-  }, () => ({ kind: 'allow' }))
-  assert.equal(sourceApprovedLowering.kind, 'ask')
-  assert.match(sourceApprovedLowering.reason, /read-only/u)
-
-  permissionPreset = 'danger-full-access'
-  const autonomousExec = {
-    name: 'session_send',
-    agent: source,
-    arguments: {
-      target_id: target.id,
-      content: 'AUTONOMOUS-CONTENT',
-      idempotency_key: 'autonomous-test-001',
-    },
+  const oldDefinition = source.tools.get('session_send')
+  const exec = { name: 'session_send', agent: source, arguments: { target_id: target.id, content: 'full access relay', idempotency_key: 'dynamic-test-001' } }
+  assert.equal(preExecute(exec, () => ({ kind: 'allow' })).kind, 'allow')
+  await oldDefinition.execute(exec.arguments, exec)
+  assert.equal(target.inbox.length, 1)
+  const emitPermission = type => listeners.get('session/event')[0](source.session, { type, data: {} })
+  for (const preset of ['workspace-write', 'custom', 'session.readonly', undefined]) {
+    permissionPreset = preset
+    emitPermission('permission/preset')
+    assert.equal(source.tools.size, 0)
+    assert.equal(preExecute(exec, () => ({ kind: 'allow' })).kind, 'deny')
+    await assert.rejects(oldDefinition.execute(exec.arguments, exec), /控制权限/u)
   }
-  const autonomous = preExecute(autonomousExec, () => ({ kind: 'allow' }))
-  assert.equal(autonomous.kind, 'allow')
-  await source.tools.get('session_send').execute(autonomousExec.arguments, autonomousExec)
-  assert.match(target.inbox.at(-1).content[0].text, /delegated-by-danger-full-access-controller/u)
-  const autonomousPermission = await preExecute({
-    name: 'session_permission_set',
-    agent: source,
-    arguments: {
-      target_id: target.id,
-      permission_preset: 'read-only',
-      reason: 'full controller can lower autonomously',
-      idempotency_key: 'permission-route-full-001',
-    },
-  }, () => ({ kind: 'allow' }))
-  assert.equal(autonomousPermission.kind, 'allow')
+  permissionPreset = 'danger-full-access'
+  emitPermission('approval/policy')
+  assert.equal(source.tools.has('session_send'), true)
+  permissionPreset = 'custom'
+  emitPermission('sandbox/mode')
+  assert.equal(source.tools.size, 0)
+  permissionPreset = 'danger-full-access'
+  listeners.get('permission-presets/catalog-changed')[0]()
+  assert.equal(source.tools.has('session_send'), true)
+  permissions.permissionPresets.current = () => { throw new Error('service fault') }
+  listeners.get('permission-presets/catalog-changed')[0]()
+  assert.equal(source.tools.size, 0)
+  await assert.rejects(oldDefinition.execute(exec.arguments, exec), /控制权限/u)
 
   for (const cleanup of cleanups.toReversed()) await cleanup?.()
   assert.equal(source.tools.size, 0)

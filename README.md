@@ -14,12 +14,12 @@
 
 ## 安全模型
 
-- **默认无控制者**：`controllerSessionIds` 为空且 `authorizeAllOrdinarySessions=false` 时，不向任何 Agent 注册工具。
-- **工具按 Agent scope 注册**：受管部署可只向显式控制会话挂载；个人 DSH 可显式启用 `authorizeAllOrdinarySessions`，让所有普通用户会话获得工具。subagent 不会因该开关获得工具，中继轮即使来自已授权普通会话也会在执行时被拒绝。
+- **实时 Full Access 准入**：每次 API 调用、工具执行与实际管理副作用前均查询官方 `permissionPresets.current(session)`，仅精确 `danger-full-access` 可用。缺服务、缺 Session、异常、未知预设（包括 `session.readonly`）均拒绝。
+- **动态工具挂载**：所有 origin 的 Full Access 会话均可挂载，无控制会话名单或普通/root/child 自建分类。监听 `permission/preset`、`sandbox/mode`、`approval/policy` 与 `permission-presets/catalog-changed`，通过官方 `tools/change` 与 `tools.restrict({deny: ...})` 屏蔽 Scope 继承的管理工具；降级即时卸载，重授自动挂载，旧工具引用仍需实时核验。中继轮防护继续执行。
 - **执行时重复鉴权**：工具可见性只是界面边界；每次执行仍校验精确 controller id、普通会话、非 self、非 subagent；当前默认允许同一 DSH Host 内跨工作区控制，投递和运行态管理仍要求目标为 live。
-- **权限预设决定授权方式**：Workspace Write 控制器的副作用继续走 `tools/pre-execute → ask`；只有当前原生预设确认为 `danger-full-access` 的控制器可自主执行。判定读取 DSH 会话事件折叠结果，不接受消息自报。
-- **子会话审批不错误集中**：仅由 `danger-full-access` 控制器创建/恢复的受管会话，以及该控制器发起的 relay / Schedule 轮次，可把目标审批路由回来源控制器；Workspace Write 控制器不截获，人工审批卡保留在子会话 UI。
-- **权限调整按方向授权**：Full access 控制器可自主升降子会话权限；Workspace Write 控制器调整到 `read-only` / `workspace-write` 时在来源审批，提升为 `danger-full-access` 时必须在目标子会话 UI 人工审批。
+- **管理入口始终复核**：工具策略、执行体和异步准备后的实际副作用均复核当前官方 `danger-full-access`，不接受消息自报、历史身份或旧配置授权。
+- **子会话审批不错误集中**：仅由 `danger-full-access` 控制器创建/恢复的受管会话，以及该控制器发起的 relay / Schedule 轮次，可把目标审批路由回来源控制器；来源撤权后停止委托，人工审批卡保留在目标 UI。
+- **权限调整保留审计**：当前 Full Access 控制器可升降普通目标权限；已持久化的一次目标审批请求在结算前复核来源权限及目标旧值，撤权和状态变化均取消实际执行。
 - **子代理可以只降权**：外部编码代理可在当前目标 Session 权限之下请求 `read-only` 或 `workspace-write`；Session Control 每次按目标 Session 实时验证，任何提权请求都会在启动前拒绝。
 - **中继降权**：目标系统提示明确把 `<dsh-session-relay>` 视作不受信委派；正文 JSON 会转义 `<`，不能闭合包裹。中继触发的轮次不能调用任何会话控制工具。
 - **单向编排**：目标默认没有控制工具；即使目标也是 controller，中继轮也会被 Host 拒绝，阻断 A→B→A 自动循环。
@@ -29,28 +29,28 @@
 | 工具 | 说明 |
 | --- | --- |
 | `session_status` | 指定 ID 时自动查询 live/cold；列表模式可选包含持久 cold 会话 |
-| `session_events` | 默认只读显著事件元数据；Workspace Write 的正文读取需审批 |
+| `session_events` | 默认读取显著事件元数据；Full Access 可按参数读取正文 |
 | `session_send` | 幂等异步投递；默认终态/需关注时持久自动回报来源会话 |
 | `session_batch_send` | 分发 1–8 项，创建 batch 父子图并只发送一份聚合回报 |
 | `session_wait` | 仅供同轮依赖、显式等待或审批处理；不再是派发后的默认动作 |
 | `session_wait_many` | 同时等待 1–20 个 operation，支持 revision cursor 和需关注状态 |
-| `session_interrupt` | 按权限预设授权后中断当前轮，可等待真正 idle |
+| `session_interrupt` | Full Access 入口中断当前轮，可等待真正 idle |
 | `session_cancel` | 精确取消排队 operation；只中断属于该 operation 的活动轮 |
-| `session_open` | 按权限预设授权后创建、恢复或 fork 普通会话 |
-| `session_manage` | 按权限预设授权后重命名，或 suspend 本插件持有的会话 |
-| `session_schedule_create` | 按权限预设授权后创建原生持久 after/at/every 定时任务 |
+| `session_open` | Full Access 入口创建、恢复或 fork 普通会话 |
+| `session_manage` | Full Access 入口重命名，或 suspend 本插件持有的会话 |
+| `session_schedule_create` | Full Access 入口创建原生持久 after/at/every 定时任务 |
 | `session_schedule_list` | 查看 live/cold 会话定时任务；正文默认按哈希隐藏 |
-| `session_schedule_delete` | 按权限预设授权后删除目标会话定时任务 |
+| `session_schedule_delete` | Full Access 入口删除目标会话定时任务 |
 | `session_permission_get` | 读取 live/cold 子会话的原生权限预设、沙箱模式和审批策略 |
-| `session_permission_set` | 持久升降子会话权限；Workspace Write 请求 Full access 时在子会话 UI 审批 |
+| `session_permission_set` | Full Access 来源持久升降普通目标权限 |
 | `session_approval_list` | 查看由当前 Full Access 控制器承接的子会话待审批项 |
 | `session_approval_decide` | Full Access 控制器按指纹自主批准一次或拒绝；决定幂等持久化 |
 | `session_workspace_list` | 列出 DSH 已注册工作区、目录状态与会话归属 |
-| `session_workspace_add` | 按权限预设授权后创建目录并注册/复用 DSH Workspace |
-| `session_project_open` | 按权限预设授权后完成目录、Workspace、会话创建与 attach |
+| `session_workspace_add` | Full Access 入口创建目录并注册/复用 DSH Workspace |
+| `session_project_open` | Full Access 入口完成目录、Workspace、会话创建与 attach |
 | `session_operations` | 分页查看来源 controller 自己的持久 operation |
 
-`session_status(target_id=...)` 会自动在 live Agent 与持久 cold 历史之间解析目标，不要求模型额外传 `include_cold=true`；`include_cold` 仅控制未指定目标时的列表是否扩展 cold 会话。`session_events` 支持 `before_seq` / `after_seq` 分页并可直接读取 cold 历史；`include_content` 只开放用户/助手正文与 Schedule 提示，`include_tool_results` 才开放工具参数和嵌套结果，两者在 Workspace Write 下均需人工审批，在 `danger-full-access` 下由控制器自主读取。事件摘要兼容当前 DSH 把工具结果调用 ID 写入 `message.source.callId` 的结构和旧版顶层 `callId`，所有缺失坐标固定返回 `null`，确保工具输出始终满足 DSH 的无损 JSON 边界。发送、中断等主动控制仍只接受 live 普通会话；目标未运行时会明确提示先在 DSH 中恢复。`session_open` 可覆盖 provider、model、reasoning effort 和初始权限，模型覆盖值会先经 DSH LLM Core 精确校验。
+`session_status(target_id=...)` 会自动在 live Agent 与持久 cold 历史之间解析目标，不要求模型额外传 `include_cold=true`；`include_cold` 仅控制未指定目标时的列表是否扩展 cold 会话。`session_events` 支持 `before_seq` / `after_seq` 分页并可直接读取 cold 历史；`include_content` 只开放用户/助手正文与 Schedule 提示，`include_tool_results` 才开放工具参数和嵌套结果，两者均由当前 Full Access 控制器按参数读取。事件摘要兼容当前 DSH 把工具结果调用 ID 写入 `message.source.callId` 的结构和旧版顶层 `callId`，所有缺失坐标固定返回 `null`，确保工具输出始终满足 DSH 的无损 JSON 边界。发送、中断等主动控制仍只接受 live 普通会话；目标未运行时会明确提示先在 DSH 中恢复。`session_open` 可覆盖 provider、model、reasoning effort 和初始权限，模型覆盖值会先经 DSH LLM Core 精确校验。
 
 ## 内置 Skill
 
@@ -71,10 +71,10 @@
 
 - `session_permission_get` 只读折叠目标的 `permission/preset`、`sandbox/mode` 和 `approval/policy`，读取 cold 会话时不会恢复它。
 - `session_permission_set` 只接受 `read-only`、`workspace-write`、`danger-full-access`，并把来源、目标、旧值、新值、原因、授权位置和幂等键记录为持久 `permission` operation。
-- Full access 控制器可自主升降 live/cold 子会话。Workspace Write 控制器调为 `read-only` 或 `workspace-write` 时走来源会话逐次审批；请求 `danger-full-access` 时不在主会话集中人工审批，而是向目标投递插件内部请求，在目标自己的开放 turn 内调用 DSH 原生 `approval.request()`。
+- 当前 Full Access 控制器可升降 live/cold 普通目标权限。旧版本已持久化的目标审批请求仍在目标开放 turn 内使用官方 `approval.request()`，执行前重新核实来源为 Full Access。
 - 内部权限请求在 `agent/pre-step` 中处理并从进入模型的消息列表移除。批准前会再次核对来源权限和目标旧权限；任何变化都会零执行。只有目标返回 `allowed-once` 后才调用原生 `permissionPresets.apply()`，随后 flush 并验证折叠值。
 - cold 目标会临时 resume，结算后重新收敛为 cold。插件重启时只恢复尚未领取的内部请求；已经进入审批但未确认的请求标记失败且绝不重放。
-- `session_open` 和 `session_project_open` 支持 `permission_preset`。Workspace Write 创建 Full access 子会话时，先以受限权限创建，再在新子会话 UI 请求提升；父 operation 返回 `permission_operation`，可用 `session_wait` 独立等待。
+- `session_open` 和 `session_project_open` 支持 `permission_preset`，由当前 Full Access 来源设置目标初始权限；父 operation 返回 `permission_operation` 可供对账。
 - 子会话切到 `danger-full-access` 后，其沙箱为完全访问且审批策略为 `never`，会自行运行而不再逐项请求主线程审批；需要逐项监督时应保留 `workspace-write`，由 Full access 主线程承接其请求。
 
 ## 主线程自主审批
@@ -90,14 +90,14 @@
 - Bundle 会在控制插件之前加载官方 `@deepseek-ai/dsh-schedule`，定时事实写入目标会话自己的 `schedule/change` 事件流；本插件不维护第二套提醒协议。
 - 控制器可以跨会话创建、查询和删除 `after_seconds`、显式 `at`、以及至少 5 分钟的固定间隔 `every_seconds`。
 - 若目标为 cold，管理操作会临时 resume，完成原生持久化屏障后重新收敛为 cold。
-- 由控制器审批创建的任务会被持久 operation 跟踪。目标到期时即使为 cold，协调器也会自动恢复；官方 Schedule 完成 dispatch 并让会话回到 idle 后，再收敛为 cold。
+- 由控制器审批创建的任务会被持久 operation 跟踪。来源当前权限可核实为 Full Access 时，目标到期即使为 cold，协调器也会自动恢复；官方 Schedule 完成 dispatch 并让会话回到 idle 后，再收敛为 cold。
 - 创建或删除返回 `persistence_uncertain` 时不会冒险重试，而是保留幂等键并进入 `needs_attention`，要求先 list 对账。
 
 ## 工作区与项目启动
 
 - `session_workspace_add` 只接受绝对路径；可递归创建不存在的目录，然后调用 `ctx.workspaceRegistry.create()`。规范路径已存在时幂等复用。
 - `session_workspace_remove` 只取消 DSH Workspace Registry 中的登记，不删除工作区目录、文件、会话或 session log。调用必须同时提供已登记的 `workspace_id` 和 `expected_path`；插件核对 ID 对应实体的规范绝对路径，不匹配或 ID 未登记时拒绝操作。
-- 取消登记属于注册表写操作：read-only 控制会话会被拒绝；Workspace Write 按次请求人工审批；Full access 按现有 `canDelegate` 规则自主或审批。控制器鉴权与 relay-turn 防护先于执行。成功结果和持久 operation 用于记录取消登记状态并供对账。
+- 取消登记属于注册表写操作：只有当前 Full Access 会话有管理工具准入；目标会话原有审批语义仍保留。控制器鉴权与 relay-turn 防护先于执行。成功结果和持久 operation 用于记录取消登记状态并供对账。
 - 该工具保留目录及历史会话数据；它只改变 Workspace 登记状态，不代表删除项目或其历史。重试使用相同参数和幂等键，由 operation 对账；不得把同一路径后来新登记的 Workspace 当作旧 operation 的目标。
 - `session_project_open` 复用 DSH Host 的正式顺序：确保目录 → 注册 Workspace → Core Agent Factory 创建会话 → `Workspace.attachSession()`。
 - Agent 创建成功但 Workspace attach 失败时返回 `partial`，不会删除目录、Workspace 或已经创建的会话来掩盖部分成功。
@@ -138,16 +138,13 @@ pnpm add github:gyyxs88/dsh-session-control#<commit-sha>
 
 ## 配置
 
-Bundle 自带配置默认关闭。部署层必须覆盖：
+Bundle 根据官方当前权限自动准入。部署层配置状态保存位置：
 
 ```yaml
 - insert:
     - id: authorized-session-control
       name: 'dsh-session-control'
       config:
-        controllerSessionIds:
-          - session-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
-        authorizeAllOrdinarySessions: false
         stateDir: 'D:\\path\\to\\.dsh-home\\session-control'
         sameWorkspaceOnly: false
         maxPendingPerTarget: 3
@@ -163,11 +160,11 @@ Bundle 自带配置默认关闭。部署层必须覆盖：
             controllerSessionId: 'remote-host-controller-01'
 ```
 
-配置 `remoteProjectSocket` 后，插件启动一个权限为 `0600` 的 Unix socket bridge；它接受 `remote-project.ping`、`remote-project.open`、`remote-project.schedule-create`、`remote-project.schedule-delete`、`remote-project.runtime-auth-begin`、`remote-project.runtime-auth-confirm` 和 `remote-project.execution-policy-verify`，串行调用官方 `openProject` / `createSchedule` / `deleteSchedule` API 与当前 Host 的 Session/权限状态。独立 Schedule 创建和删除都必须绑定原来源 controller、真实 target Session 和独立幂等键，不能通过重新打开项目或直接编辑 Session 日志冒充。`remoteProjectSourceAllowlist` 必须显式列出 `sourceHostId`、`sourceSessionId` 以及远端实际执行 API 的 `controllerSessionId`；空 allowlist fail closed，来源身份不会被当成远端 Agent 查询。运行时首次认证只绑定来源控制端、Host 和精确 runtime，可在新项目 Session 创建前完成；执行策略核验必须在 Session 创建后按真实 target Session 实时查询。socket 路径或 Host ID 缺失、占用路径不是 socket、或官方服务不可用时，bridge 启动失败；不提供静默 fake fallback。
+配置 `remoteProjectSocket` 后，插件启动一个权限为 `0600` 的 Unix socket bridge；它接受 `remote-project.ping`、`remote-project.open`、`remote-project.schedule-create`、`remote-project.schedule-delete`、`remote-project.runtime-auth-begin`、`remote-project.runtime-auth-confirm` 和 `remote-project.execution-policy-verify`，串行调用官方 `openProject` / `createSchedule` / `deleteSchedule` API 与当前 Host 的 Session/权限状态。独立 Schedule 创建和删除都必须绑定原来源 controller、真实 target Session 和独立幂等键，不能通过重新打开项目或直接编辑 Session 日志冒充。`remoteProjectSourceAllowlist` 是跨 Host 传输身份映射，不能授予管理权限；映射到的执行会话仍必须实时为 Full Access。该传输映射必须显式列出 `sourceHostId`、`sourceSessionId` 以及远端实际执行 API 的 `controllerSessionId`；空 allowlist fail closed，来源身份不会被当成远端 Agent 查询。运行时首次认证只绑定来源控制端、Host 和精确 runtime，可在新项目 Session 创建前完成；执行策略核验必须在 Session 创建后按真实 target Session 实时查询。socket 路径或 Host ID 缺失、占用路径不是 socket、或官方服务不可用时，bridge 启动失败；不提供静默 fake fallback。
 
 当前默认 `sameWorkspaceOnly=false`，因此控制器可管理同一 DSH Host 内不同 Workspace 的普通会话；跨主机和子代理仍不在这条链路中。对 cold 普通会话开放列举、历史、定时管理和经审批的 Core resume；投递、中断与一般运行态管理仍要求目标为 live。子代理继续使用 DSH 原生 `send_message` / `interrupt_agent`。
 
-个人单用户 DSH 若希望“在任意普通会话中直接要求添加目录、创建项目或控制其他普通会话”，应设置 `authorizeAllOrdinarySessions: true`。该模式按当前会话原生权限预设继续执行 Workspace Write 审批或 Full Access 自主授权，不把权限授予 subagent，也不允许 relay 轮继续发起会话控制。
+在官方 DSH UI 将当前会话切换为 Full Access 后即可使用管理工具；Workspace Write 与 Read Only 无管理工具准入。旧配置的控制会话字段已失效，不会授予权限。持久任务恢复和审批委托重新核实来源当前权限，历史 ID 和回执只用于归属与幂等。
 
 ## 验证
 
@@ -185,3 +182,8 @@ Windows 上若系统 Node 低于 24，测试 runner 会明确拒绝并提示版�
 ## 官方优先策略
 
 原生子代理、父子通信及当前会话定时任务优先使用官方入口。本插件只补普通会话之间的跨项目控制、批量操作、持久回报与受管审批，底层复用官方服务。已有 operation 继续由原入口对账，不重复派发，不以普通会话模拟原生子代理。
+
+
+## 隔离开发验收
+
+使用 Node 24 运行 `scripts/Test-DesktopDevelopment.mjs <任务目录> <只读提取的官方SDK目录>`。runner 不继承 provider、SSH、认证或 DSH_HOME 环境；SDK 按 manifest 逐文件核对 hash。测试 fixture 的删除调用改为 rename 到同一 run 的 recovery，保留可恢复字节；不删除真实目录、会话或数据。正式 `scripts/pack-check.mjs` 支持指定 `SESSION_CONTROL_PACK_ROOT`，保留 TGZ 与安装 smoke 的 consumer。Web rc.1 衍生包只调整唯一版本、官方 peer/dev metadata 和 Remote manifest；管理业务源与桌面包保持一致。

@@ -7,7 +7,7 @@ description: 用自然语言编排 DSH 普通会话、工作区、权限、审�
 
 使用 `session_*` 工具把用户的自然语言目标落实为可审计、可恢复的 DSH 编排。不要要求用户提供会话 ID、operation ID、Workspace ID 或幂等键；先自行发现并维护这些内部标识。插件的实时鉴权和 operation 状态是事实源，本 Skill 不能扩大用户授权或绕过审批。
 
-工具可见性由部署授权决定。推荐个人 DSH 启用 `authorizeAllOrdinarySessions`，使每个普通用户会话都能使用本 Skill；subagent 和会话控制插件中继轮仍不能调用这些工具。受管或多用户部署可继续使用显式 `controllerSessionIds`。
+工具准入只取决于官方 DSH 当前 `danger-full-access`，适用于所有会话 origin，无名单配置。降级立即卸载工具，重新完全访问自动挂载；服务、Session 或权限未知时拒绝。中继轮仍禁止发起管理操作。
 
 ## 官方优先，插件补充
 
@@ -33,8 +33,8 @@ description: 用自然语言编排 DSH 普通会话、工作区、权限、审�
 
 - 主控制会话为 `danger-full-access`，目标保持 `workspace-write`：适合由主线程长期监督。主线程可自主执行控制操作，并用 `session_approval_list` / `session_approval_decide` 处理受管目标的逐项审批。
 - 目标为 `danger-full-access`：适合目标必须在主控制会话离线时仍完全自主运行的情况。目标不再逐项申请审批；只有用户已授权这种自主程度时才使用。
-- 主控制会话为 `workspace-write`：副作用在来源会话逐次人工审批；目标自己的审批留在目标 UI。不要声称主线程可以集中审批。
-- 主控制会话为 `workspace-write` 时，将目标提升到 `danger-full-access` 必须在目标会话 UI 人工批准；降为 `read-only` 或 `workspace-write` 则在来源审批。
+- 当前会话为 `workspace-write` 或 `read-only`：不可调用会话管理工具，需要用户在官方 UI 切换到 Full Access。目标自己的审批仍在目标 UI 或已有委托链处理。
+- 已持久化的待审批权限请求仍按原一次审批语义结算，但执行前来源必须仍为 Full Access；来源撤权后不能继续调整目标权限。
 - 临时提升目标权限前记录旧预设。任务结束后恢复旧预设，除非用户明确要求长期保留；恢复也使用新的稳定幂等键。
 
 审批时先读取完整待审批项，并核对目标会话、来源 operation、工具、理由和指纹。对用户目标内、预期且风险相称的动作可 `allowed-once`；对越界、破坏性、凭据、外部发布、付费或含糊动作应拒绝或交还用户决定。必须原样使用 list 返回的 `approval_fingerprint`。
@@ -57,7 +57,7 @@ description: 用自然语言编排 DSH 普通会话、工作区、权限、审�
 
 只需注册目录时使用 `session_workspace_add`。用户明确要求取消工作区登记时，先用 `session_workspace_list` 找到准确的 Workspace，再将其 `workspace_id` 与显示的绝对 `path` 分别作为 `workspace_id` 和 `expected_path` 传给 `session_workspace_remove`，并为这次逻辑操作生成稳定幂等键。ID 或规范路径不匹配、或登记已不存在时停止并对账，不猜测目标、不换路径重试。
 
-`session_workspace_remove` 仅取消 Workspace Registry 登记，绝不表示删除目录、文件、会话或 session log；因此工具完成后项目内容和历史会话仍保留。read-only 控制会话不能执行；Workspace Write 需要本次人工审批；Full access 按现有 `canDelegate` 规则执行。审批理由应核对 Workspace ID 与路径；未经用户明确要求，不要把“取消登记”描述成删除项目或清除历史。
+`session_workspace_remove` 仅取消 Workspace Registry 登记，绝不表示删除目录、文件、会话或 session log；因此工具完成后项目内容和历史会话仍保留。只有当前 Full Access 会话可执行；工作区 ID 与路径仍须匹配。审批理由应核对 Workspace ID 与路径；未经用户明确要求，不要把“取消登记”描述成删除项目或清除历史。
 
 在现有 Workspace 创建、恢复或从完整 turn 边界 fork 会话时使用 `session_open`。`session_open` 不创建 Git worktree；需要代码隔离时必须让目标会话在项目内另行采用仓库支持的隔离方式。
 

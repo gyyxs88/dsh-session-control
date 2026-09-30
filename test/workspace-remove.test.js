@@ -23,6 +23,8 @@ const entries = new Map([
 ])
 let deleteCalls = 0
 const ctx = {
+  agents: { get: id => [controller, outsider].find(a => a.id === id) },
+  permissionPresets: { current: session => session === controller.session ? 'danger-full-access' : 'workspace-write' },
   workspaceRegistry: {
     get: id => entries.get(id),
     async delete(id) { deleteCalls++; return entries.delete(id) },

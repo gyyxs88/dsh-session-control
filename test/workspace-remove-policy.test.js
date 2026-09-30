@@ -21,10 +21,10 @@ const source = {
 const target = { id: 'target', session: { header: { id: 'target', cwd: projectDir }, events: [], snapshotEvents() { return [...this.events] } }, tools: new Map() }
 const listeners = new Map()
 const cleanups = []
-let preset = 'workspace-write'
+let preset = 'danger-full-access'
 const permissionPresets = {
   names: ['read-only', 'workspace-write', 'danger-full-access'],
-  current: () => preset,
+  current: session => session === source.session ? preset : 'workspace-write',
   resolve: name => ({ sandbox: name, approval: name === 'danger-full-access' ? 'never' : 'ask' }),
 }
 const ctx = {
@@ -60,17 +60,17 @@ const decision = (agent = source, overrides = {}) => preExecute({ name: 'session
 assert.equal(decision(target).kind, 'deny')
 preset = 'read-only'
 assert.equal(decision().kind, 'deny')
-preset = 'workspace-write'
+preset = 'danger-full-access'
 assert.equal(decision(source, { expected_path: path.join(stateDir, 'wrong') }).kind, 'deny')
 if (process.platform === 'win32') {
   assert.equal(decision(source, { expected_path: '\\project' }).kind, 'deny')
   assert.equal(decision(source, { expected_path: 'C:project' }).kind, 'deny')
 }
-const ask = decision()
-assert.equal(ask.kind, 'ask')
-assert.match(ask.reason, /保留目录和会话日志/u)
+preset = 'workspace-write'
+assert.equal(decision().kind, 'deny')
 assert.equal(deleted, 0)
 preset = 'danger-full-access'
+listeners.get('permission-presets/catalog-changed')[0]()
 assert.equal(decision().kind, 'allow')
 const first = await source.tools.get('session_workspace_remove').execute(args, { agent: source })
 assert.equal(first.ok, true)

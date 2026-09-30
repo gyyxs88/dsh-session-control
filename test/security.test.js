@@ -6,7 +6,7 @@ import { isJsonValue } from '@deepseek-ai/dsh-util-values'
 
 import {
   PLUGIN_ID,
-  admitControllerAgent,
+  isAuthorizedController,
   approvalReason,
   contentHash,
   currentTurnIsRelay,
@@ -25,19 +25,25 @@ test('workspace comparison is canonical and rejects missing paths', () => {
   assert.equal(sameWorkspace(undefined, workspace), false)
 })
 
-test('all-ordinary controller admission is broad for normal sessions but excludes subagents', () => {
-  const controllers = new Set(['explicit-controller'])
-  const agents = {
-    get: () => undefined,
-    isOwnedBy: () => false,
-  }
+test('controller admission is the current official Full Access snapshot for every session origin', () => {
   const ordinary = { id: 'ordinary', session: { header: { cwd: '/workspace' } } }
   const subagent = { id: 'subagent', session: { header: { cwd: '/workspace', origin: 'subagent' } } }
-  assert.equal(admitControllerAgent(agents, ordinary, controllers, false), false)
-  assert.equal(admitControllerAgent(agents, ordinary, controllers, true), true)
-  assert.equal(controllers.has('ordinary'), true)
-  assert.equal(admitControllerAgent(agents, subagent, controllers, true), false)
-  assert.equal(controllers.has('subagent'), false)
+  let preset = 'danger-full-access'
+  const ctx = { agents: { get: id => [ordinary, subagent].find(a => a.id === id) }, permissionPresets: { current: () => preset } }
+  assert.equal(isAuthorizedController(ordinary, ctx), true)
+  assert.equal(isAuthorizedController(subagent, ctx), true)
+  for (const denied of ['workspace-write', 'read-only', 'custom', 'session.readonly', undefined, null]) {
+    preset = denied
+    assert.equal(isAuthorizedController(ordinary, ctx), false)
+  }
+  preset = 'danger-full-access'
+  assert.equal(isAuthorizedController(ordinary, ctx), true)
+  assert.equal(isAuthorizedController({ ...ordinary }, ctx), false)
+  ctx.permissionPresets.current = () => { throw new Error('unavailable') }
+  assert.equal(isAuthorizedController(ordinary, ctx), false)
+  delete ctx.permissionPresets
+  assert.equal(isAuthorizedController(ordinary, ctx), false)
+  assert.equal(isAuthorizedController({ id: 'missing' }, ctx), false)
 })
 
 test('relay envelope cannot be closed by caller content', () => {
