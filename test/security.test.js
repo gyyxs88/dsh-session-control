@@ -80,8 +80,7 @@ test('relay provenance binds the trusted source task and sanitizes its display t
   const target = { id: 'target-session' }
   const operation = { id: 'operation-1' }
   assert.deepEqual(relayMessageSource(operation, source, target), {
-    kind: 'plugin',
-    plugin: PLUGIN_ID,
+    kind: `plugin:${PLUGIN_ID}`,
     form: 'relay',
     provenanceVersion: 1,
     senderDisplayName: 'DSH',

@@ -1,6 +1,6 @@
 {
   "name": "dsh-session-control",
-  "version": "0.8.5-dsh021.1",
+  "version": "0.8.5-dsh021.2",
   "description": "Authorized, durable cross-session control for DeepSeek Harness",
   "keywords": [
     "deepseek-harness",
@@ -35,7 +35,7 @@
     "remote": {
       "manifestVersion": "1.0",
       "pluginId": "dsh-session-control",
-      "version": "0.8.5-dsh021.1",
+      "version": "0.8.5-dsh021.2",
       "placements": [
         "remote"
       ],

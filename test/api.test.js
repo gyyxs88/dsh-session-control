@@ -264,10 +264,9 @@ test('send captures pre-followup status and is idempotent', async (t) => {
     ...args,
     content: 'different content',
   }, exec), /幂等键/u)
-  assert.equal(target.inbox[0].source.plugin, 'dsh-session-control')
+  assert.equal(target.inbox[0].source.plugin, undefined)
   assert.deepEqual(target.inbox[0].source, {
-    kind: 'plugin',
-    plugin: 'dsh-session-control',
+    kind: 'plugin:dsh-session-control',
     form: 'relay',
     provenanceVersion: 1,
     senderDisplayName: 'DSH',
@@ -666,7 +665,8 @@ test('workspace-write controller leaves target approval in the child UI', async 
   assert.equal(listed.count, 0)
 })
 
-test('scheduled autonomous turn routes approval back to its full-access controller', async (t) => {
+for (const scheduleSource of [{ kind: 'schedule' }, { kind: 'plugin', plugin: 'schedule' }]) {
+test(`scheduled ${scheduleSource.kind} turn routes approval back to its full-access controller`, async (t) => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'dsh-schedule-approval-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const store = await new OperationStore({ stateDir: directory, maxOperations: 50 }).load()
@@ -713,7 +713,7 @@ test('scheduled autonomous turn routes approval back to its full-access controll
       type: 'text',
       text: '[SCHEDULE REMINDER]\nschedule_id_json: "schedule-42"\nreminder_prompt_json: "continue"',
     }],
-    source: { kind: 'plugin', plugin: 'schedule' },
+    source: scheduleSource,
   }
   target.session.append('user/message', reminder)
   assert.equal(broker.routeFromMessage(target.session, reminder), true)
@@ -740,6 +740,7 @@ test('scheduled autonomous turn routes approval back to its full-access controll
   assert.equal(await request, 'rejected')
   assert.equal(childUiCalls, 1)
 })
+}
 
 test('controller tools register only in the supplied scoped context', async (t) => {
   const { source, store, api } = await fixture(t)
@@ -789,7 +790,11 @@ test('terminal public operations never expose stale attention', () => {
   assert.equal(row.attention, null)
 })
 
-test('relay-started controller turn is denied even for an authorized id', async (t) => {
+for (const relaySource of [
+  { kind: 'plugin:dsh-session-control', form: 'relay' },
+  { kind: 'plugin', plugin: 'dsh-session-control', form: 'relay' },
+]) {
+test(`relay-started ${relaySource.kind} controller turn is denied even for an authorized id`, async (t) => {
   const { source, target, api } = await fixture(t)
   source.session.events.push(
     { type: 'turn/start', data: { turn: 1 } },
@@ -797,7 +802,7 @@ test('relay-started controller turn is denied even for an authorized id', async 
       type: 'user/message',
       data: {
         id: 'relay',
-        source: { kind: 'plugin', plugin: 'dsh-session-control', form: 'relay' },
+        source: relaySource,
       },
     },
   )
@@ -807,6 +812,7 @@ test('relay-started controller turn is denied even for an authorized id', async 
     idempotency_key: 'relay-loop-001',
   }, { agent: source, signal: new AbortController().signal }), /中继消息/u)
 })
+}
 
 test('pending capacity and persistent rate limits fail closed', async (t) => {
   const { source, target, api } = await fixture(t)

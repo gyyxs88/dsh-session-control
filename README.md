@@ -1,6 +1,10 @@
 # dsh-session-control
 
-面向 DeepSeek Harness 桌面版 `0.2.0-rc.2` 的受权跨会话控制插件。适配依据随应用打包的官方接口核对；`session_workspace_remove` 只调用 Workspace Registry 的登记删除接口，不删除目录或会话文件。
+面向 DeepSeek Harness 桌面版 `0.2.0-rc.2` / `0.2.1-rc.2` 的受权跨会话控制插件。适配依据随应用打包的官方接口核对；`session_workspace_remove` 只调用 Workspace Registry 的登记删除接口，不删除目录或会话文件。
+
+`0.8.5-dsh021.2` 按官方 v3→v4 的第三方 producer 映射，统一使用 `source.kind: 'plugin:dsh-session-control'` 写入 relay、permission-change、approval-notice 和两类操作回报，保留 form 与来源元数据，不把插件消息标成人类消息。读取兼容旧 `{ kind: 'plugin', plugin: 'dsh-session-control' }`；原生 schedule 同时识别 `kind: 'schedule'` 和旧包装。来源识别不授予权限，仍实时复核 Full Access，并阻断中继轮再次控制会话。
+
+离线官方回归使用 `node scripts/Test-DesktopDevelopment.mjs <本插件内测试目录> <已提取且含 manifest.json 的官方 SDK 目录>`；运行器校验 SDK 文件 SHA-256、隔离环境并把测试清理改为 recoverable rename。`0.2.1-rc.2` SDK 必须额外运行 `test/official-v4.contract.mjs`（五类 producer、旧包装拒绝、真实 JSONL flush/read 与 suspend/reopen），缺 SDK/JSONL/原生依赖会失败，不跳过。该专项独立于默认 `npm test` 的旧 devDependencies；两代 SDK 均运行 `producer-compat.contract.mjs` 做官方 Session admission/fsync/snapshot restore 定向兼容检查，旧 SDK 的 snapshot 检查不等同于旧 JSONL backend flush 验收。
 
 ## 远程项目设计
 

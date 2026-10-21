@@ -11,7 +11,7 @@ const sdk = path.resolve(process.env.SESSION_CONTROL_TEST_SDK ?? '')
 if (!process.env.SESSION_CONTROL_TEST_TMP || !fixtures.startsWith(task + path.sep)
   || fs.lstatSync(fixtures).isSymbolicLink()) throw new Error('Dedicated hermetic runner required')
 const manifest = JSON.parse(fs.readFileSync(path.join(sdk, 'manifest.json'), 'utf8'))
-if (manifest.formatVersion !== 1 || !['0.2.0-rc.2', '0.2.0-rc.1'].includes(manifest.source.version)) throw new Error('Unreviewed SDK')
+if (manifest.formatVersion !== 1 || !['0.2.1-rc.2', '0.2.0-rc.2', '0.2.0-rc.1'].includes(manifest.source.version)) throw new Error('Unreviewed SDK')
 const packages = new Map()
 let count = 0
 for (const pkg of manifest.packages) {

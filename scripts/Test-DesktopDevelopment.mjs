@@ -18,11 +18,22 @@ const env = {
 }
 if (process.platform === 'win32') Object.assign(env, { SystemRoot: 'C:\\Windows', WINDIR: 'C:\\Windows', PATH: 'C:\\Windows\\System32', PATHEXT: '.COM;.EXE;.BAT;.CMD' })
 const files = fs.readdirSync(path.join(repo, 'test')).filter(f => f.endsWith('.test.js')).sort().map(f => 'test/' + f)
+const sdkManifest = JSON.parse(fs.readFileSync(path.join(sdk, 'manifest.json'), 'utf8'))
+const sdkVersion = sdkManifest.source.version
+const v4Contract = sdkVersion === '0.2.1-rc.2'
+files.push('test/producer-compat.contract.mjs')
+if (v4Contract) {
+  // Explicit SDK-only test dependencies; do not rely on default devDependencies.
+  for (const name of ['@deepseek-ai/dsh-session-persistence-jsonl', '@deepseek-ai/dsh-session-format-v2-to-v3']) {
+    if (!sdkManifest.packages.some(pkg => pkg.name === name && pkg.version === sdkVersion)) throw new Error(`Required v4 test SDK package missing: ${name}`)
+  }
+  files.push('test/official-v4.contract.mjs')
+}
 const result = spawnSync(process.execPath, ['--import', pathToFileURL(path.join(repo, 'scripts/official-test-runtime.mjs')).href,
   '--test', '--test-isolation=none', ...files], { cwd: repo, env, encoding: 'utf8', windowsHide: true })
 fs.writeFileSync(path.join(run, 'stdout.log'), result.stdout ?? '')
 fs.writeFileSync(path.join(run, 'stderr.log'), result.stderr ?? '')
-const summary = { node: process.versions.node, exitCode: result.status, files: files.length,
+const summary = { node: process.versions.node, exitCode: result.status, files: files.length, sdkVersion, v4Contract,
   inheritedEnvironment: false, cleanup: 'recoverable rename', sdk, run }
 fs.writeFileSync(path.join(run, 'result.json'), JSON.stringify(summary, null, 2) + '\n')
 process.stdout.write(result.stdout ?? '')

@@ -91,7 +91,8 @@ test('new send terminal state durably follows up its source exactly once', async
   await eventually(() => store.get(row.id).notification?.state === 'delivered')
 
   const message = source.inbox.nextTurn[0]
-  assert.equal(message.source.plugin, 'dsh-session-control')
+  assert.equal(message.source.kind, 'plugin:dsh-session-control')
+  assert.equal(message.source.plugin, undefined)
   assert.equal(message.source.form, 'operation-terminal-report')
   assert.match(message.content[0].text, /全部完成/u)
   assert.equal(flushes(), 1)

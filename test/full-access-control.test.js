@@ -195,11 +195,32 @@ test('restored schedule provenance does not authorize a downgraded or missing co
   assert.ok(resumed >= 1, 'fresh cold Full Access snapshot may restore its own schedule; no remembered IDs or other controller fallback')
 })
 
-test('legacy pending permission request rechecks source both before and after target UI approval', async t => {
+test('legacy and canonical native schedule messages reject a source revoked before pre-step', async t => {
+  for (const source of [{ kind: 'schedule' }, { kind: 'plugin', plugin: 'schedule' }]) {
+    const f = await fixture(t)
+    const now = new Date().toISOString()
+    await f.store.add({ id: 'native-schedule-operation', kind: 'schedule', action: 'create', sourceId: f.source.id, targetId: f.target.id,
+      sourceCwd: '/test/project', targetCwd: '/test/project', idempotencyKey: 'native-schedule-001', contentHash: 'hash', messageId: '',
+      status: 'scheduled', scheduleId: 'native-schedule', createdAt: now, updatedAt: now })
+    f.permissions.set(f.source.session, 'workspace-write')
+    const message = { id: 'native-reminder', source, content: [{ type: 'text', text: 'schedule_id_json: "native-schedule"' }] }
+    let entered = false
+    const decision = await f.api.handlePermissionPreStep({ agent: f.target, messages: [message] }, async () => { entered = true; return { kind: 'enter', messages: [message] } })
+    assert.equal(decision.kind, 'reject')
+    assert.equal(entered, false)
+    assert.equal(f.store.get('native-schedule-operation').attention.reason, 'schedule-source-permission-revoked')
+  }
+})
+
+test('legacy and canonical pending permission requests recheck source before and after target UI approval', async t => {
+  for (const source of [
+    { kind: 'plugin', plugin: 'dsh-session-control', form: 'permission-change' },
+    { kind: 'plugin:dsh-session-control', form: 'permission-change' },
+  ]) {
   for (const revokeDuringApproval of [false, true]) {
     const f = await fixture(t)
     const now = new Date().toISOString()
-    const message = { id: 'legacy-permission-message', source: { kind: 'plugin', plugin: 'dsh-session-control', form: 'permission-change' } }
+    const message = { id: 'legacy-permission-message', source }
     await f.store.add({ id: 'legacy-permission-operation', kind: 'permission', action: 'set', sourceId: f.source.id, targetId: f.target.id,
       sourceCwd: '/test/project', targetCwd: '/test/project', idempotencyKey: 'legacy-permission-001', contentHash: 'hash', messageId: message.id,
       status: 'queued', queued: true, durability: 'flushed', turn: null, attention: null, reason: null, reply: '',
@@ -212,5 +233,6 @@ test('legacy pending permission request rechecks source both before and after ta
     assert.equal(approvals, revokeDuringApproval ? 1 : 0)
     assert.equal(f.permissions.current(f.target.session), 'workspace-write')
     assert.equal(f.store.get('legacy-permission-operation').status, 'failed')
+  }
   }
 })
